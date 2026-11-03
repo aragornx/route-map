@@ -1,0 +1,3208 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self' https://nominatim.openstreetmap.org https://photon.komoot.io https://routing.openstreetmap.de https://valhalla1.openstreetmap.de; base-uri 'none'; form-action 'none'">
+  <title>Mapa trasy</title>
+  <script>
+    // Sets the system theme before first paint; the app script applies the saved choice.
+    document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark" : "light";
+  </script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
+  <style>
+    /* Theme */
+    :root {
+      --bg: #ffffff;
+      --fg: #1b1f24;
+      --muted: #57606a;
+      --accent: #0b5cad;
+      --on-accent: #ffffff;
+      --border: #d0d7de;
+      --danger: #b42318;
+      --shadow: 0 2px 10px rgb(0 0 0 / 25%);
+      --space: 0.75rem;
+      --target: 44px;
+      --sheet-h: 5.5rem;
+      --panel-w: 22rem;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-left: env(safe-area-inset-left, 0px);
+      --safe-right: env(safe-area-inset-right, 0px);
+    }
+
+    :root[data-theme="dark"] {
+      --bg: #161b22;
+      --fg: #e6edf3;
+      --muted: #9da7b3;
+      --accent: #58a6ff;
+      --on-accent: #0d1117;
+      --border: #30363d;
+      --danger: #ff8a80;
+      --shadow: 0 2px 10px rgb(0 0 0 / 60%);
+    }
+
+    /* Base layout */
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--fg);
+      font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body { height: 100dvh; position: relative; }
+
+    #map { position: absolute; inset: 0; }
+
+    .map-error { padding: calc(var(--safe-top) + 4rem) var(--space) var(--space); }
+
+    button { font: inherit; color: inherit; }
+
+    button:focus-visible,
+    .leaflet-bar a:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* Top bar */
+    #topbar {
+      position: absolute;
+      z-index: 1000;
+      top: calc(var(--safe-top) + var(--space));
+      left: calc(var(--safe-left) + var(--space));
+      right: calc(var(--safe-right) + var(--space));
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--space);
+      pointer-events: none;
+    }
+
+    #topbar > * { pointer-events: auto; }
+
+    .topbar-actions { display: flex; gap: var(--space); }
+
+    /* Kept for screen readers only. */
+    .app-title {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .icon-btn {
+      min-width: var(--target);
+      min-height: var(--target);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      background: var(--bg);
+      box-shadow: var(--shadow);
+      font-size: 1.25rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    /* Bottom sheet */
+    #sheet {
+      position: absolute;
+      z-index: 1000;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      min-height: 5rem;
+      padding: var(--space) calc(var(--safe-right) + var(--space))
+        calc(var(--safe-bottom) + var(--space)) calc(var(--safe-left) + var(--space));
+      background: var(--bg);
+      border-radius: 16px 16px 0 0;
+      box-shadow: var(--shadow);
+    }
+
+    #sheet h2 { margin: 0; font-size: 1rem; }
+
+    #sheet p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+    .sheet-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space);
+      width: 100%;
+      min-height: var(--target);
+      padding: 0;
+      border: 0;
+      background: none;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .sheet-toggle::after { content: "\25B2"; font-size: 0.75rem; }
+
+    .sheet-toggle[aria-expanded="true"]::after { transform: rotate(180deg); }
+
+    #sheetBody {
+      max-height: 40dvh;
+      margin-top: 0.5rem;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    .plain-list { margin: 0; padding: 0; list-style: none; }
+
+    .issue-list { margin-bottom: 0.5rem; color: var(--muted); font-size: 0.85rem; }
+
+    .point-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); }
+
+    .point, .day-btn {
+      display: flex;
+      flex: 1;
+      align-items: flex-start;
+      gap: var(--space);
+      min-height: var(--target);
+      padding: 0.5rem 0.25rem;
+      border: 0;
+      background: none;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .day-btn {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.5rem 0.75rem;
+    }
+
+    .day-btn[aria-current="true"] {
+      background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    .point[aria-current="true"] {
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+
+    .day-title { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+
+    .day-source {
+      flex: none;
+      padding: 0.1rem 0.5rem;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--fg) 10%, transparent);
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .day-source[data-source="local"] {
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+      color: var(--accent);
+    }
+
+    .day-row {
+      display: flex;
+      align-items: stretch;
+      margin-bottom: 0.35rem;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+    }
+
+    .day-delete {
+      min-width: var(--target);
+      border: 0;
+      border-left: 1px solid var(--border);
+      background: none;
+      color: var(--danger);
+      cursor: pointer;
+    }
+
+    .library-tree summary {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-height: var(--target);
+      font-weight: 600;
+      list-style: none;
+      cursor: pointer;
+    }
+
+    .library-tree summary::-webkit-details-marker { display: none; }
+
+    .library-tree summary::before { content: "\25B8"; color: var(--muted); }
+
+    .library-tree details[open] > summary::before { content: "\25BE"; }
+
+    .trip-count {
+      margin-left: auto;
+      padding: 0 0.5rem;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--fg) 10%, transparent);
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .point-main { display: flex; flex-direction: column; min-width: 0; }
+
+    #pointList .point-row { border-bottom: 0; }
+
+    #pointList .point { padding: 0.3rem 0.25rem; }
+
+    .point-title { display: flex; align-items: baseline; gap: 0.4rem; min-width: 0; }
+
+    .point-time {
+      flex: none;
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
+
+    .point-name {
+      display: -webkit-box;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      font-weight: 600;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+    }
+
+    .point-meta {
+      display: -webkit-box;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-size: 0.85rem;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+    }
+
+    /* Distance and walking time between two consecutive points; the line has the route colour. */
+    .leg {
+      margin-left: 17px;
+      border-left: 3px solid var(--border);
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .leg-btn {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      min-height: var(--target);
+      padding: 0 0.25rem 0 1.1rem;
+      border: 0;
+      background: none;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .leg-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+    .point-warn { color: var(--muted); font-size: 0.85rem; font-style: italic; }
+
+    .point-action { min-width: var(--target); border: 0; background: none; cursor: pointer; }
+
+    #progressBar { display: block; width: 100%; height: 0.5rem; margin-top: 0.25rem; }
+
+    #progressBar[hidden], #retryBtn[hidden] { display: none; }
+
+    #retryBtn { margin-top: 0.5rem; }
+
+    .field { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.5rem 0 0; }
+
+    .field > span { color: var(--muted); font-size: 0.85rem; }
+
+    .dialog input[type="text"],
+    .dialog select {
+      width: 100%;
+      min-height: var(--target);
+      padding: 0 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--fg);
+      font: inherit;
+    }
+
+    .dialog-row { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+
+    .badge {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 28px;
+      padding: 0 4px;
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      color: #ffffff;
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-shadow: 0 0 3px rgb(0 0 0 / 80%);
+      box-shadow: 0 1px 4px rgb(0 0 0 / 50%);
+    }
+
+    .pin { background: none; border: 0; }
+
+    .pin .badge { width: 100%; height: 100%; }
+
+    .popup-title { font-weight: 700; }
+
+    .popup-line { margin: 0.25rem 0 0; }
+
+    .popup-link { display: inline-block; margin-top: 0.5rem; }
+
+    /* Leaflet adjustments: keep controls above the sheet, enlarge touch targets */
+    .leaflet-bottom { bottom: var(--sheet-h); }
+
+    .leaflet-touch .leaflet-bar a {
+      width: var(--target);
+      height: var(--target);
+      line-height: var(--target);
+    }
+
+    .leaflet-control-attribution { font-size: 0.7rem; }
+
+    :root[data-theme="dark"] .leaflet-bar a,
+    :root[data-theme="dark"] .leaflet-container .leaflet-control-attribution {
+      background-color: var(--bg);
+      color: var(--fg);
+      border-color: var(--border);
+    }
+
+    :root[data-theme="dark"] .leaflet-control-attribution a { color: var(--accent); }
+
+    /* Invert only the raster tiles; markers, routes and popups keep their colours. */
+    :root[data-theme="dark"] .leaflet-tile-pane {
+      filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9);
+    }
+
+    :root[data-theme="dark"] .leaflet-popup-content-wrapper,
+    :root[data-theme="dark"] .leaflet-popup-tip {
+      background: var(--bg);
+      color: var(--fg);
+    }
+
+    :root[data-theme="dark"] .leaflet-container a.leaflet-popup-close-button {
+      color: var(--muted);
+    }
+
+    /* GPS controls */
+    #gpsbar {
+      position: absolute;
+      z-index: 1000;
+      left: calc(var(--safe-left) + var(--space));
+      bottom: calc(var(--sheet-h) + 2.25rem);
+      display: flex;
+      align-items: center;
+      gap: var(--space);
+    }
+
+    .pill-btn {
+      min-height: var(--target);
+      padding: 0 1rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+      box-shadow: var(--shadow);
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .pill-btn[aria-pressed="true"],
+    .icon-btn[aria-pressed="true"] {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--on-accent);
+    }
+
+    .icon-btn:disabled { opacity: 0.5; cursor: default; }
+
+    /* Toast */
+    #toast {
+      position: absolute;
+      z-index: 1100;
+      left: 50%;
+      top: calc(var(--safe-top) + var(--space) * 2 + var(--target));
+      transform: translateX(-50%);
+      max-width: min(90vw, 28rem);
+      padding: 0.6rem var(--space);
+      border-radius: 8px;
+      background: var(--fg);
+      color: var(--bg);
+      box-shadow: var(--shadow);
+      font-size: 0.9rem;
+    }
+
+    #toast:empty { display: none; }
+
+    /* Dialogs */
+    .dialog {
+      width: min(90vw, 26rem);
+      max-height: 85dvh;
+      padding: var(--space) 1.25rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--bg);
+      box-shadow: 0 12px 40px rgb(0 0 0 / 35%);
+      color: var(--fg);
+    }
+
+    .dialog::backdrop { background: rgb(0 0 0 / 50%); backdrop-filter: blur(2px); }
+
+    .dialog h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+
+    .dialog p { margin: 0 0 0.5rem; }
+
+    .text-btn {
+      min-height: var(--target);
+      padding: 0 1.25rem;
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+    }
+
+    /* Menu dialog: fixed header, scrolling body made of cards. */
+    .menu { width: min(92vw, 28rem); max-height: 88dvh; padding: 0; overflow: hidden; }
+
+    .menu[open] { display: flex; flex-direction: column; }
+
+    .menu-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.5rem 0.5rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .menu-head h2 { margin: 0; font-size: 1.15rem; }
+
+    .menu-close { border: 0; box-shadow: none; }
+
+    .menu-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      padding: 1rem;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    .card {
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+    }
+
+    .card-title {
+      margin: 0 0 0.5rem;
+      color: var(--muted);
+      font-size: 0.75rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .card-empty { color: var(--muted); }
+
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      width: 100%;
+      min-height: var(--target);
+      padding: 0 1rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      color: var(--fg);
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn[data-icon]::before { content: attr(data-icon); color: var(--muted); }
+
+    .btn-primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: var(--on-accent);
+    }
+
+    .btn-primary[data-icon]::before { color: inherit; }
+
+    .btn-danger { color: var(--danger); }
+
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+
+    /* Side panel on wide screens; the bottom sheet stays on phones. */
+    @media (min-width: 720px) {
+      #sheet {
+        top: calc(var(--safe-top) + var(--space) * 2 + var(--target));
+        right: auto;
+        bottom: var(--space);
+        left: calc(var(--safe-left) + var(--space));
+        display: flex;
+        flex-direction: column;
+        width: var(--panel-w);
+        padding: var(--space);
+        border-radius: 12px;
+      }
+
+      .sheet-toggle { pointer-events: none; }
+
+      .sheet-toggle::after { content: none; }
+
+      #sheetBody { flex: 1; max-height: none; }
+
+      .leaflet-bottom { bottom: 0; }
+
+      #gpsbar {
+        bottom: calc(var(--space) + 2.25rem);
+        left: calc(var(--safe-left) + var(--space) * 2 + var(--panel-w));
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="map" role="application" aria-label="Mapa"></div>
+
+  <header id="topbar">
+    <h1 class="app-title" id="appTitle"></h1>
+    <div class="topbar-actions">
+      <button type="button" class="icon-btn" id="themeBtn">&#9680;</button>
+      <button type="button" class="icon-btn" id="menuBtn">&#9776;</button>
+      <button type="button" class="icon-btn" id="aboutBtn">i</button>
+    </div>
+  </header>
+
+  <div id="gpsbar" role="group">
+    <button type="button" class="pill-btn" id="gpsBtn" aria-pressed="false"></button>
+    <button type="button" class="icon-btn" id="centerBtn" aria-pressed="false" disabled>&#9678;</button>
+  </div>
+
+  <section id="sheet" aria-labelledby="sheetTitle">
+    <h2 id="sheetTitle">
+      <button type="button" class="sheet-toggle" id="sheetToggle" aria-expanded="false"
+        aria-controls="sheetBody"></button>
+    </h2>
+    <p id="sheetSummary"></p>
+    <progress id="progressBar" hidden></progress>
+    <button type="button" class="text-btn" id="retryBtn" hidden></button>
+    <div id="sheetBody" hidden>
+      <ul class="plain-list issue-list" id="issueList"></ul>
+      <ol class="plain-list" id="pointList"></ol>
+    </div>
+  </section>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <dialog class="dialog menu" id="menu" aria-labelledby="menuTitle">
+    <header class="menu-head">
+      <h2 id="menuTitle" tabindex="-1" autofocus></h2>
+      <button type="button" class="icon-btn menu-close" id="menuClose">&#10005;</button>
+    </header>
+    <div class="menu-body">
+      <section class="card library" aria-labelledby="libraryTitle">
+        <h3 class="card-title" id="libraryTitle"></h3>
+        <p class="card-empty" id="libraryEmpty" hidden></p>
+        <div class="library-tree" id="libraryTree"></div>
+        <button type="button" class="btn btn-primary" id="importBtn" data-icon="+"></button>
+        <input type="file" id="libraryInput" accept=".zip,.csv" multiple hidden>
+      </section>
+      <section class="card" aria-labelledby="dataTitle">
+        <h3 class="card-title" id="dataTitle"></h3>
+        <div class="btn-row">
+          <button type="button" class="btn" id="loadCsvBtn" data-icon="&#8593;"></button>
+          <button type="button" class="btn" id="sampleBtn" data-icon="&#8595;"></button>
+        </div>
+        <button type="button" class="btn btn-danger" id="clearBtn"></button>
+        <input type="file" id="csvInput" accept=".csv,.txt" hidden>
+      </section>
+      <section class="card" aria-labelledby="settingsTitle">
+        <h3 class="card-title" id="settingsTitle"></h3>
+        <label class="field" for="cityInput">
+          <span id="cityLabel"></span>
+          <input type="text" id="cityInput" maxlength="80" autocomplete="off">
+        </label>
+        <label class="field" for="themeSelect">
+          <span id="themeLabel"></span>
+          <select id="themeSelect">
+            <option value="auto" id="themeAuto"></option>
+            <option value="light" id="themeLight"></option>
+            <option value="dark" id="themeDark"></option>
+          </select>
+        </label>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog class="dialog" id="ask" aria-labelledby="askMessage">
+    <form method="dialog">
+      <p id="askMessage"></p>
+      <input type="text" id="askInput" autocomplete="off" aria-labelledby="askMessage" hidden>
+      <div class="dialog-row">
+        <button type="submit" class="text-btn" id="askOk" value="ok"></button>
+        <button type="submit" class="text-btn" id="askCancel" value="cancel"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog" id="about" aria-labelledby="aboutTitle">
+    <h2 id="aboutTitle"></h2>
+    <p id="aboutPrivacy"></p>
+    <p id="aboutAttribution"></p>
+    <p id="aboutVersion"></p>
+    <button type="button" class="text-btn" id="aboutClose"></button>
+  </dialog>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+  <script>
+    "use strict";
+
+    /* ===== CONFIG ===== */
+    const CONFIG = {
+      APP_VERSION: "0.7.2",
+      MAP_DEFAULT_CENTER: [52.0, 19.0],
+      MAP_DEFAULT_ZOOM: 6,
+      MAP_MAX_ZOOM: 19,
+      TILE_URL: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      TILE_ATTRIBUTION: "&copy; <a href=\"https://www.openstreetmap.org/copyright\">"
+        + "OpenStreetMap</a> contributors",
+      TOAST_MS: 4000,
+      TOAST_LONG_MS: 9000,
+      TILE_ERROR_COOLDOWN_MS: 15000,
+      GPS_OPTIONS: { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 },
+      GPS_RENDER_MS: 1000,
+      GPS_FOLLOW_ZOOM: 17,
+      GPS_COLOR: "#0b5cad",
+      GPS_OUTLINE_COLOR: "#ffffff",
+      GPS_DOT_RADIUS: 8,
+      // Okabe-Ito and Tol colour-blind-safe colours; segments also alternate dash patterns.
+      PALETTE: [
+        "#0072B2", "#D55E00", "#009E73", "#CC79A7", "#332288",
+        "#E69F00", "#117733", "#882255", "#56B4E9", "#999933",
+      ],
+      MAX_CSV_BYTES: 2 * 1024 * 1024,
+      MARKER_SIZE: 28,
+      FOCUS_ZOOM: 16,
+      FIT_MAX_ZOOM: 17,
+      FIT_PADDING_TOP_LEFT: [40, 70],
+      FIT_PADDING_BOTTOM_RIGHT: [40, 170],
+      WIDE_QUERY: "(min-width: 720px)",
+      PANEL_WIDTH_PX: 352,
+      SAMPLE_FILE_NAME: "sample.csv",
+      BLOB_REVOKE_MS: 1000,
+      STORE_PREFIX: "rm:v1:",
+      DATA_DIR: "data/",
+      INDEX_URL: "data/index.json",
+      INDEX_VERSION: 1,
+      DB_NAME: "rm-library",
+      DB_STORE: "files",
+      DB_VERSION: 1,
+      OTHER_TRIP: "Inne",
+      JSZIP_URL: "https://unpkg.com/jszip@3.10.1/dist/jszip.min.js",
+      JSZIP_SRI: "sha256-rMfkFFWoB2W1/Zx+4bgHim0WC7vKRVrq6FTeZclH1Z4=",
+      MAX_ZIP_BYTES: 20 * 1024 * 1024,
+      MAX_ZIP_ENTRIES: 500,
+      FETCH_TIMEOUT_MS: 10000,
+      FETCH_RETRIES: 2,
+      RETRY_BASE_MS: 500,
+      RATE_LIMIT_BACKOFF_MS: 2000,
+      RATE_LIMIT_MAX_WAIT_MS: 10000,
+      ROUTE_INTERVAL_MS: 500,
+      NOMINATIM_URL: "https://nominatim.openstreetmap.org/search",
+      PHOTON_URL: "https://photon.komoot.io/api/",
+      GEOCODE_INTERVAL_MS: 1100,
+      GEOCODE_RETRIES: 0,
+      MAX_POINTS: 100,
+      GEOCODE_MAX_FAILURES: 3,
+      GEOCACHE_MAX: 500,
+      // The routed-foot instance ignores the profile in the path and always routes on foot.
+      ROUTER_URL: "https://routing.openstreetmap.de/routed-foot/route/v1/driving/",
+      ROUTE_CONCURRENCY: 3,
+      ROUTE_RETRIES: 2,
+      ROUTE_TIMEOUT_MS: 6000,
+      VALHALLA_URL: "https://valhalla1.openstreetmap.de/route",
+      PROVIDER_MAX_FAILURES: 2,
+      ROUTE_MAX_FAILURES: 3,
+      ROUTECACHE_MAX: 300,
+      COORD_DECIMALS: 5,
+      SIMPLIFY_TOLERANCE: 0.00002,
+      WALK_SPEED_MPS: 1.39,
+      SEGMENT_WEIGHT: 5,
+      SEGMENT_OPACITY: 0.85,
+      SEGMENT_DASH: "10 10",
+      FALLBACK_WEIGHT: 3,
+      FALLBACK_DASH: "2 8",
+      SEGMENT_TAP_TOLERANCE: 10,
+      PERSIST_DEBOUNCE_MS: 500,
+    };
+
+    /* ===== I18N ===== */
+    const I18N = {
+      appName: "Mapa trasy",
+      aboutOpen: "O aplikacji",
+      aboutClose: "Zamknij",
+      askOk: "OK",
+      askCancel: "Anuluj",
+      themeToggle: "Przełącz tryb jasny/ciemny",
+      themeLabel: "Motyw",
+      themeAuto: "Automatyczny (jak w systemie)",
+      themeLight: "Jasny",
+      themeDark: "Ciemny",
+      offline: "Brak połączenia z internetem. Zapisane punkty i trasy nadal działają, mapa i nowe trasy mogą być niedostępne.",
+      online: "Połączenie z internetem przywrócone.",
+      unexpectedError: "Wystąpił nieoczekiwany błąd.",
+      aboutTitle: "O aplikacji",
+      aboutPrivacy: "Prywatność: pliki CSV nie opuszczają telefonu. Na zewnątrz trafiają "
+        + "wyłącznie adresy (geokoder) i współrzędne (wyznaczanie trasy). Aplikacja nie "
+        + "używa analityki ani ciasteczek.",
+      aboutAttribution: "Mapa: © współtwórcy OpenStreetMap.",
+      aboutVersion: "Wersja",
+      sheetTitle: "Punkty trasy",
+      sheetEmpty: "Brak wczytanych punktów. Otwórz menu, aby wczytać plik CSV.",
+      menuOpen: "Menu",
+      menuTitle: "Menu",
+      dataTitle: "Plik CSV",
+      settingsTitle: "Ustawienia",
+      libraryTitle: "Biblioteka",
+      libraryEmpty: "Biblioteka jest pusta. Dodaj plik ZIP lub CSV.",
+      importBtn: "Dodaj do biblioteki",
+      sourceBuiltin: "wbudowane",
+      sourceLocal: "z telefonu",
+      sourceOverridden: "nadpisany lokalnie",
+      deleteDay: "Usuń z telefonu: {title}",
+      deleteConfirm: "Usunąć „{title}” z telefonu?",
+      importOverwrite: "Pliki już istnieją w bibliotece ({n}). Nadpisać je?",
+      importDone: "Dodano plików: {n}.",
+      importSkipped: "Pominięto plików: {n}.",
+      importNothing: "Nie znaleziono plików CSV do zaimportowania.",
+      importFailed: "Nie udało się zaimportować plików.",
+      dayLoadError: "Nie udało się wczytać wybranego dnia.",
+      dayDeleted: "Usunięto z biblioteki.",
+      storageUnavailable: "Pamięć przeglądarki jest niedostępna. Biblioteka z telefonu "
+        + "zostanie zapomniana po zamknięciu karty.",
+      menuClose: "Zamknij",
+      loadCsv: "Wczytaj CSV",
+      sampleCsv: "Pobierz wzór",
+      clearData: "Wyczyść dane",
+      dataCleared: "Dane wyczyszczone.",
+      pointsCount: "Punkty: {n}",
+      issuesCount: "Uwagi: {n}",
+      statusPending: "szukanie lokalizacji…",
+      statusNoGeo: "brak lokalizacji",
+      setCoords: "Wpisz współrzędne punktu {order}",
+      promptCoords: "Współrzędne w formacie: szerokość, długość (np. 41.9022, 12.4534)",
+      badCoords: "Nieprawidłowe współrzędne.",
+      retryGeocode: "Ponów wyszukiwanie lokalizacji i tras",
+      geocoding: "Geokodowanie",
+      routing: "Wyznaczanie tras",
+      legStraight: "linia prosta",
+      legFocus: "Pokaż odcinek {from} → {to} na mapie: {walk}",
+      segmentLabel: "{from} → {to}, {distance}, ok. {duration}",
+      segmentFallback: "{from} → {to}, trasa niedostępna (linia prosta)",
+      routeSummary: "Marsz: {distance}, ok. {duration}",
+      plannedSummary: "plan {span}",
+      nearestSummary: "Najbliżej: {order} ({distance})",
+      routesFallback: "Nie udało się wyznaczyć tras dla odcinków: {n}. Pokazano linie proste.",
+      routingOffline: "Brak połączenia z internetem. Odcinki pokazano jako linie proste.",
+      geocodeMissing: "Nie znaleziono lokalizacji dla punktów: {n}. Wpisz współrzędne ręcznie lub ponów wyszukiwanie.",
+      geocodeOffline: "Brak połączenia z internetem. Nie można wyszukać adresów.",
+      geocodeFailed: "Geokoder jest niedostępny. Spróbuj ponownie później.",
+      cityLabel: "Domyślne miasto dla adresów bez miasta",
+      navigate: "Nawiguj",
+      noMarker: "Ten punkt nie ma jeszcze współrzędnych.",
+      csvEmpty: "Nie znaleziono żadnych poprawnych punktów w pliku.",
+      csvIssues: "Wczytano z uwagami. Liczba uwag: {n}.",
+      csvTooBig: "Plik jest za duży (limit {mb} MB).",
+      csvReadError: "Nie udało się odczytać pliku.",
+      issues: {
+        badOrder: "Wiersz {line}: nieprawidłowy numer, pominięto.",
+        duplicate: "Wiersz {line}: powtórzony numer {order}, pominięto.",
+        noAddress: "Wiersz {line}: brak adresu, pominięto.",
+        badCoords: "Wiersz {line}: nieprawidłowe lat/lon, użyto adresu.",
+        tooMany: "Za dużo punktów: wczytano pierwsze {max}.",
+      },
+      leafletMissing: "Nie udało się załadować mapy. Sprawdź połączenie z internetem "
+        + "i odśwież stronę.",
+      tilesError: "Nie można pobrać kafelków mapy. Sprawdź połączenie z internetem.",
+      gpsGroup: "GPS",
+      gpsStart: "Moja pozycja",
+      gpsCenter: "Wyśrodkuj mapę na mojej pozycji",
+      gpsInsecure: "GPS wymaga bezpiecznego połączenia. Otwórz aplikację przez adres https://…",
+      gpsUnsupported: "Ta przeglądarka nie obsługuje geolokalizacji.",
+      gpsDenied: "Brak zgody na lokalizację. Dotknij ikony przy adresie strony, wybierz "
+        + "Uprawnienia > Lokalizacja > Zezwól i włącz „Moja pozycja” ponownie.",
+      gpsUnavailable: "Brak sygnału GPS. Wyjdź na otwartą przestrzeń i spróbuj ponownie.",
+      gpsTimeout: "Przekroczono czas oczekiwania na pozycję GPS.",
+      gpsError: "Nie udało się ustalić pozycji.",
+    };
+
+    /* ===== State ===== */
+    /** @typedef {{lat: number, lon: number, accuracy: number, ts: number}} Fix */
+    /**
+     * @typedef {object} Point
+     * @property {number} order
+     * @property {string} address
+     * @property {string} time
+     * @property {string} description
+     * @property {number|null} lat
+     * @property {number|null} lon
+     * @property {"ok"|"pending"|"no-geo"} status
+     */
+    const state = {
+      gps: { on: false, follow: false, /** @type {Fix|null} */ last: null },
+      /** @type {Point[]} */
+      points: [],
+      /** @type {{from: number, to: number, coords: number[][], distance: number, duration: number, status: "ok"|"fallback"}[]} */
+      segments: [],
+      issues: [],
+      dayLabel: "",
+      dayKey: null,
+      progress: null,
+      settings: { city: "", lastDay: null, theme: "auto" },
+      /** Trips from the built-in index and the phone library, merged. */
+      library: [],
+      activeOrder: null,
+      sheetOpen: false,
+    };
+    const listeners = [];
+
+    /** @param {(s: typeof state) => void} listener Called after every state change. */
+    function subscribe(listener) {
+      listeners.push(listener);
+    }
+
+    /** @param {Partial<typeof state>} patch Top-level keys replace the existing ones. */
+    function setState(patch) {
+      Object.assign(state, patch);
+      listeners.forEach((listener) => listener(state));
+    }
+
+    /* ===== Util ===== */
+    const Util = (() => {
+      /**
+       * Builds a DOM element without innerHTML. Falsy children are skipped.
+       * @param {string} tag
+       * @param {Record<string, string|number>} [attrs] `class` and `text` are shortcuts.
+       * @param {...(Node|string|false|null|undefined)} children
+       * @returns {HTMLElement}
+       */
+      function el(tag, attrs = {}, ...children) {
+        const node = document.createElement(tag);
+        for (const [key, value] of Object.entries(attrs)) {
+          if (key === "class") node.className = value;
+          else if (key === "text") node.textContent = value;
+          else node.setAttribute(key, value);
+        }
+        node.append(...children.filter(Boolean));
+        return node;
+      }
+
+      /** Replaces `{key}` placeholders in a template. */
+      function fmt(template, values = {}) {
+        return template.replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? ""));
+      }
+
+      /**
+       * Runs `worker` over `items` with at most `limit` tasks in flight.
+       * @template T
+       * @param {T[]} items
+       * @param {number} limit
+       * @param {(item: T) => Promise<void>} worker
+       */
+      async function mapPool(items, limit, worker) {
+        let next = 0;
+        const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+          while (next < items.length) {
+            const item = items[next];
+            next += 1;
+            await worker(item);
+          }
+        });
+        await Promise.all(runners);
+      }
+
+      return { el, fmt, mapPool };
+    })();
+
+    /* ===== Model (pure helpers) ===== */
+    const Model = (() => {
+      /** @param {Point} point */
+      const hasCoords = (point) => Number.isFinite(point.lat) && Number.isFinite(point.lon);
+
+      /** @param {number} index Zero-based segment or point index. */
+      const colorFor = (index) => CONFIG.PALETTE[index % CONFIG.PALETTE.length];
+
+      const validCoords = (lat, lon) => Number.isFinite(lat) && Number.isFinite(lon)
+        && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+
+      const normalizeAddress = (text) => text.trim().toLowerCase().replace(/\s+/g, " ");
+
+      /** Appends the default city to addresses that have no comma (no city part). */
+      const buildQuery = (address, city) => (city && !address.includes(",") ? `${address}, ${city}` : address);
+
+      /** @returns {{lat: number, lon: number}|null} */
+      function parseNominatim(json) {
+        const hit = Array.isArray(json) ? json[0] : null;
+        const lat = Number.parseFloat(hit?.lat);
+        const lon = Number.parseFloat(hit?.lon);
+        return validCoords(lat, lon) ? { lat, lon } : null;
+      }
+
+      /** @returns {{lat: number, lon: number}|null} GeoJSON order is [lon, lat]. */
+      function parsePhoton(json) {
+        const [lon, lat] = json?.features?.[0]?.geometry?.coordinates ?? [];
+        return validCoords(lat, lon) ? { lat, lon } : null;
+      }
+
+      const round = (value) => Number(value.toFixed(CONFIG.COORD_DECIMALS));
+
+      /** Cache key for a segment: both ends rounded to 5 decimals. */
+      const routeKey = (a, b) => [a, b].map((p) => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`).join("|");
+
+      const EARTH_RADIUS_M = 6371000;
+      const toRad = (deg) => (deg * Math.PI) / 180;
+
+      /** Great-circle distance in metres between two {lat, lon} objects. */
+      function haversine(a, b) {
+        const dLat = toRad(b.lat - a.lat);
+        const dLon = toRad(b.lon - a.lon);
+        const h = Math.sin(dLat / 2) ** 2
+          + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+        return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
+      }
+
+      function pointLineDistance(p, a, b) {
+        const dx = b[1] - a[1];
+        const dy = b[0] - a[0];
+        const lengthSq = dx * dx + dy * dy;
+        const t = lengthSq === 0 ? 0 : ((p[1] - a[1]) * dx + (p[0] - a[0]) * dy) / lengthSq;
+        const clamped = Math.max(0, Math.min(1, t));
+        return Math.hypot(p[1] - (a[1] + clamped * dx), p[0] - (a[0] + clamped * dy));
+      }
+
+      /** Douglas-Peucker on [lat, lon] pairs; tolerance in degrees. */
+      function simplify(coords, tolerance) {
+        if (coords.length <= 2) return coords;
+        const last = coords.length - 1;
+        const keep = new Set([0, last]);
+        const stack = [[0, last]];
+        while (stack.length > 0) {
+          const [start, end] = stack.pop();
+          let maxDistance = 0;
+          let index = -1;
+          for (let i = start + 1; i < end; i += 1) {
+            const distance = pointLineDistance(coords[i], coords[start], coords[end]);
+            if (distance > maxDistance) {
+              maxDistance = distance;
+              index = i;
+            }
+          }
+          if (maxDistance > tolerance) {
+            keep.add(index);
+            stack.push([start, index], [index, end]);
+          }
+        }
+        return coords.filter((_, i) => keep.has(i));
+      }
+
+      /** Rounds to 5 decimals and drops points closer than the tolerance to the line. */
+      const simplifyRoute = (coords) => simplify(
+        coords.map(([lat, lon]) => [round(lat), round(lon)]),
+        CONFIG.SIMPLIFY_TOLERANCE,
+      );
+
+      /**
+       * Validates an OSRM response and converts GeoJSON [lon, lat] to [lat, lon].
+       * @returns {{coords: number[][], distance: number, duration: number}|null}
+       */
+      function parseOsrm(json) {
+        const route = json?.code === "Ok" ? json.routes?.[0] : null;
+        const line = route?.geometry?.coordinates;
+        const valid = Array.isArray(line) && line.length >= 2
+          && line.every((c) => Array.isArray(c) && validCoords(c[1], c[0]));
+        if (!valid || !Number.isFinite(route.distance) || !Number.isFinite(route.duration)) return null;
+        return {
+          coords: line.map(([lon, lat]) => [lat, lon]),
+          distance: route.distance,
+          duration: route.duration,
+        };
+      }
+
+      /** Consecutive points that both have coordinates. */
+      function segmentPairs(points) {
+        const pairs = [];
+        for (let i = 0; i < points.length - 1; i += 1) {
+          const [a, b] = [points[i], points[i + 1]];
+          if (hasCoords(a) && hasCoords(b)) pairs.push({ id: `${a.order}-${b.order}`, a, b });
+        }
+        return pairs;
+      }
+
+      const formatDistance = (meters) => (meters < 1000
+        ? `${Math.round(meters)} m`
+        : `${(meters / 1000).toFixed(1).replace(".", ",")} km`);
+
+      function formatDuration(seconds) {
+        const minutes = Math.max(1, Math.round(seconds / 60));
+        return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+      }
+
+      /** Planned time span taken from the first and last point, e.g. "07:20\u201319:15". */
+      function plannedSpan(points) {
+        const clock = /\d{1,2}:\d{2}/g;
+        const start = points[0]?.time.match(clock)?.[0];
+        const end = points.at(-1)?.time.match(clock)?.at(-1);
+        return start && end ? `${start}\u2013${end}` : "";
+      }
+
+      /** @returns {{point: Point, distance: number}|null} closest located point to `position` */
+      function nearestPoint(position, points) {
+        let best = null;
+        for (const point of points.filter(hasCoords)) {
+          const distance = haversine(position, point);
+          if (!best || distance < best.distance) best = { point, distance };
+        }
+        return best;
+      }
+
+      /**
+       * Validates points read back from storage; null when nothing usable is stored.
+       * @param {unknown} raw
+       */
+      function restoreSaved(raw) {
+        if (!Array.isArray(raw?.points)) return null;
+        const text = (value) => (typeof value === "string" ? value : "");
+        const points = raw.points.filter((p) => Number.isInteger(p?.order)).map((p) => {
+          const located = validCoords(p.lat, p.lon);
+          const unlocated = p.status === "no-geo" ? "no-geo" : "pending";
+          return {
+            order: p.order,
+            address: text(p.address),
+            time: text(p.time),
+            description: text(p.description),
+            lat: located ? p.lat : null,
+            lon: located ? p.lon : null,
+            status: located ? "ok" : unlocated,
+          };
+        });
+        if (points.length === 0) return null;
+        const issues = Array.isArray(raw.issues)
+          ? raw.issues.filter((i) => Number.isInteger(i?.line) && I18N.issues[i.code])
+          : [];
+        return {
+          points,
+          issues,
+          dayLabel: text(raw.dayLabel),
+          dayKey: typeof raw.dayKey === "string" ? raw.dayKey : null,
+        };
+      }
+
+      return {
+        hasCoords, colorFor, validCoords, normalizeAddress, buildQuery, parseNominatim, parsePhoton,
+        routeKey, haversine, simplify, simplifyRoute, parseOsrm, segmentPairs,
+        formatDistance, formatDuration, plannedSpan, nearestPoint, restoreSaved,
+      };
+    })();
+
+    /* ===== CSV (pure) ===== */
+    const CSV = (() => {
+      const ALIASES = {
+        order: ["order", "orderno", "no", "nr", "lp", "numer", "kolejnosc"],
+        address: ["address", "adres"],
+        time: ["time", "godzina", "czas"],
+        description: ["description", "desc", "opis", "notatka"],
+        lat: ["lat", "latitude", "szerokosc"],
+        lon: ["lon", "lng", "longitude", "dlugosc"],
+      };
+      const FIELD_BY_ALIAS = new Map(
+        Object.entries(ALIASES).flatMap(([field, names]) => names.map((n) => [n, field])),
+      );
+      const DEFAULT_FIELDS = ["order", "address", "time", "description", "lat", "lon"];
+      const SEPARATORS = [",", ";", "\t"];
+      const MIN_HEADER_MATCHES = 2;
+
+      const SAMPLE = [
+        "order,address,time,description,lat,lon",
+        "1,\"Rynek 1, Zielona Góra\",09:00,Start przy ratuszu,51.9355,15.5064",
+        "2,\"Plac Pocztowy 1, Zielona Góra\",09:30,Kawa i krótka przerwa,51.9375,15.5051",
+        "3,\"Aleja Niepodległości 22, Zielona Góra\",10:15,Spotkanie,,",
+      ].join("\r\n");
+
+      /**
+       * Decodes bytes as UTF-8, falling back to windows-1250 when replacement chars appear.
+       * @param {ArrayBuffer} buffer
+       * @returns {string}
+       */
+      function decode(buffer) {
+        const utf8 = new TextDecoder("utf-8").decode(buffer);
+        if (!utf8.includes("\uFFFD")) return utf8;
+        return new TextDecoder("windows-1250").decode(buffer);
+      }
+
+      function detectSeparator(text) {
+        const firstLine = text.split(/\r?\n/).find((line) => line.trim() !== "") ?? "";
+        const counts = new Map(SEPARATORS.map((s) => [s, 0]));
+        let quoted = false;
+        for (const ch of firstLine) {
+          if (ch === "\"") quoted = !quoted;
+          else if (!quoted && counts.has(ch)) counts.set(ch, counts.get(ch) + 1);
+        }
+        return SEPARATORS.reduce((best, s) => (counts.get(s) > counts.get(best) ? s : best), ",");
+      }
+
+      /**
+       * Splits CSV text into rows of cells (quotes, BOM, `,` `;` tab, CRLF). Skips blank rows.
+       * @param {string} text
+       * @returns {string[][]}
+       */
+      function parse(text) {
+        const src = text.replace(/^\uFEFF/, "");
+        const separator = detectSeparator(src);
+        const rows = [];
+        let row = [];
+        let field = "";
+        let quoted = false;
+        const endRow = () => {
+          row.push(field);
+          field = "";
+          if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+          row = [];
+        };
+        for (let i = 0; i < src.length; i += 1) {
+          const ch = src[i];
+          if (quoted) {
+            if (ch !== "\"") field += ch;
+            else if (src[i + 1] === "\"") { field += ch; i += 1; }
+            else quoted = false;
+          } else if (ch === "\"") quoted = true;
+          else if (ch === separator) { row.push(field); field = ""; }
+          else if (ch === "\n" || ch === "\r") {
+            if (ch === "\r" && src[i + 1] === "\n") i += 1;
+            endRow();
+          } else field += ch;
+        }
+        endRow();
+        return rows;
+      }
+
+      // Strips case, diacritics and punctuation so "Kolejność" and "order_no" match aliases.
+      const normalizeName = (name) => name.toLowerCase().replace(/ł/g, "l")
+        .normalize("NFD").replace(/[^a-z]/g, "");
+
+      function detectFields(rows) {
+        const named = rows[0].map((cell) => FIELD_BY_ALIAS.get(normalizeName(cell)) ?? null);
+        if (named.filter(Boolean).length >= MIN_HEADER_MATCHES) {
+          return { fields: named, body: rows.slice(1), firstLine: 2 };
+        }
+        return { fields: DEFAULT_FIELDS, body: rows, firstLine: 1 };
+      }
+
+      /**
+       * Parses manual input such as "41.9, 12.45", "41,9;12,45" or "41.9 12.45".
+       * @returns {{lat: number, lon: number}|null}
+       */
+      function parseLatLon(text) {
+        const input = text.trim();
+        let parts = input.split(/;|,\s+|\s+/).filter(Boolean);
+        if (parts.length === 1 && input.split(",").length === 2) parts = input.split(",");
+        if (parts.length !== 2) return null;
+        const [lat, lon] = parts.map(parseCoordinate);
+        return lat !== null && lon !== null && Model.validCoords(lat, lon) ? { lat, lon } : null;
+      }
+
+      /** @returns {number|null} */
+      function parseCoordinate(text) {
+        const value = (text ?? "").trim();
+        return /^-?\d+([.,]\d+)?$/.test(value) ? Number(value.replace(",", ".")) : null;
+      }
+
+      /** @returns {{lat: number, lon: number}|"invalid"|null} null when both are empty. */
+      function parseCoords(rawLat, rawLon) {
+        if (!rawLat && !rawLon) return null;
+        const lat = parseCoordinate(rawLat);
+        const lon = parseCoordinate(rawLon);
+        const valid = lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+        return valid ? { lat, lon } : "invalid";
+      }
+
+      function buildPoint(raw, line, seen, issues) {
+        const order = /^\d+$/.test(raw.order ?? "") ? Number(raw.order) : null;
+        if (order === null) {
+          issues.push({ line, code: "badOrder" });
+          return null;
+        }
+        if (seen.has(order)) {
+          issues.push({ line, code: "duplicate", order });
+          return null;
+        }
+        let coords = parseCoords(raw.lat, raw.lon);
+        if (coords === "invalid") {
+          issues.push({ line, code: "badCoords" });
+          coords = null;
+        }
+        if (!raw.address && !coords) {
+          issues.push({ line, code: "noAddress" });
+          return null;
+        }
+        seen.add(order);
+        return {
+          order,
+          address: raw.address ?? "",
+          time: raw.time ?? "",
+          description: raw.description ?? "",
+          lat: coords?.lat ?? null,
+          lon: coords?.lon ?? null,
+          status: coords ? "ok" : "pending",
+        };
+      }
+
+      /**
+       * Converts parsed rows into points sorted by `order`; bad rows become issues.
+       * @param {string[][]} rows
+       * @returns {{points: Point[], issues: {line: number, code: string, order?: number}[]}}
+       */
+      function toPoints(rows) {
+        if (rows.length === 0) return { points: [], issues: [] };
+        const { fields, body, firstLine } = detectFields(rows);
+        const issues = [];
+        const seen = new Set();
+        const points = [];
+        body.forEach((cells, i) => {
+          const raw = {};
+          fields.forEach((field, col) => {
+            if (field && raw[field] === undefined) raw[field] = (cells[col] ?? "").trim();
+          });
+          const point = buildPoint(raw, firstLine + i, seen, issues);
+          if (point) points.push(point);
+        });
+        points.sort((a, b) => a.order - b.order);
+        if (points.length > CONFIG.MAX_POINTS) {
+          points.length = CONFIG.MAX_POINTS;
+          issues.push({ line: 0, code: "tooMany", max: CONFIG.MAX_POINTS });
+        }
+        return { points, issues };
+      }
+
+      return { decode, parse, toPoints, parseCoordinate, parseLatLon, SAMPLE };
+    })();
+
+    /* ===== Net ===== */
+    const Net = (() => {
+      class NetworkError extends Error {
+        constructor(message, options) {
+          super(message, options);
+          this.name = "NetworkError";
+          this.status = options?.status;
+        }
+      }
+      class RateLimitError extends NetworkError {
+        /** @param {number} [retryAfterMs] Server hint from the Retry-After header. */
+        constructor(message, retryAfterMs) {
+          super(message, { status: 429 });
+          this.name = "RateLimitError";
+          this.retryAfterMs = retryAfterMs;
+        }
+      }
+      class ParseError extends Error {
+        constructor(message, options) {
+          super(message, options);
+          this.name = "ParseError";
+        }
+      }
+
+      const abortError = () => new DOMException("Aborted", "AbortError");
+
+      function retryAfterMs(header) {
+        const seconds = Number(header);
+        if (!header || !Number.isFinite(seconds)) return undefined;
+        return Math.min(seconds * 1000, CONFIG.RATE_LIMIT_MAX_WAIT_MS);
+      }
+
+      /** Resolves after `ms`; rejects with an AbortError when `signal` aborts. */
+      function sleep(ms, signal) {
+        return new Promise((resolve, reject) => {
+          if (signal?.aborted) {
+            reject(abortError());
+            return;
+          }
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(abortError());
+          };
+          const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+          }, ms);
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+
+      async function readBody(response, kind) {
+        if (kind === "buffer") return response.arrayBuffer();
+        try {
+          return await response.json();
+        } catch (error) {
+          throw new ParseError("Invalid JSON", { cause: error });
+        }
+      }
+
+      async function requestOnce(url, { timeoutMs, signal, kind, cache }) {
+        if (signal?.aborted) throw abortError();
+        const controller = new AbortController();
+        const onAbort = () => controller.abort();
+        signal?.addEventListener("abort", onAbort, { once: true });
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, { signal: controller.signal, cache });
+          if (response.status === 429) {
+            throw new RateLimitError("HTTP 429", retryAfterMs(response.headers.get("retry-after")));
+          }
+          if (!response.ok) throw new NetworkError(`HTTP ${response.status}`, { status: response.status });
+          return await readBody(response, kind);
+        } catch (error) {
+          if (signal?.aborted) throw abortError();
+          if (error instanceof NetworkError || error instanceof ParseError) throw error;
+          throw new NetworkError(error.message, { cause: error });
+        } finally {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+        }
+      }
+
+      const isRetryable = (error) => error instanceof NetworkError
+        && (error.status === undefined || error.status === 429 || error.status >= 500);
+
+      async function request(url, options) {
+        const { retries = CONFIG.FETCH_RETRIES, signal } = options;
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            return await requestOnce(url, { timeoutMs: CONFIG.FETCH_TIMEOUT_MS, ...options });
+          } catch (error) {
+            if (!isRetryable(error) || attempt >= retries) throw error;
+            const backoff = error instanceof RateLimitError
+              ? Math.max(error.retryAfterMs ?? 0, CONFIG.RATE_LIMIT_BACKOFF_MS * 2 ** attempt)
+              : CONFIG.RETRY_BASE_MS * 2 ** attempt;
+            await sleep(backoff, signal);
+          }
+        }
+      }
+
+      /**
+       * GETs JSON with timeout and exponential-backoff retries.
+       * @param {string} url
+       * @param {{timeoutMs?: number, retries?: number, signal?: AbortSignal, cache?: RequestCache}} [options]
+       * @throws {NetworkError|RateLimitError|ParseError|DOMException} AbortError when cancelled
+       */
+      const fetchJson = (url, options = {}) => request(url, { ...options, kind: "json" });
+
+      /** Same as fetchJson but resolves with an ArrayBuffer. */
+      const fetchBuffer = (url, options = {}) => request(url, { ...options, kind: "buffer" });
+
+      return { NetworkError, RateLimitError, ParseError, sleep, fetchJson, fetchBuffer };
+    })();
+
+    /* ===== Store (localStorage) ===== */
+    const Store = (() => {
+      const memory = new Map();
+
+      /** Reads a JSON value; falls back to memory when storage is unavailable. */
+      function get(key, fallback) {
+        if (memory.has(key)) return memory.get(key);
+        try {
+          const raw = localStorage.getItem(CONFIG.STORE_PREFIX + key);
+          if (raw === null) return fallback;
+          const value = JSON.parse(raw);
+          memory.set(key, value);
+          return value;
+        } catch (error) {
+          console.error("Store read failed", key, error);
+          return fallback;
+        }
+      }
+
+      /** @returns {boolean} false when the value only lives in memory */
+      function set(key, value) {
+        memory.set(key, value);
+        try {
+          localStorage.setItem(CONFIG.STORE_PREFIX + key, JSON.stringify(value));
+          return true;
+        } catch (error) {
+          console.error("Store write failed", key, error);
+          return false;
+        }
+      }
+
+      return { get, set };
+    })();
+
+    /* ===== LibraryCore (pure) ===== */
+    const LibraryCore = (() => {
+      const DAY_FILE = /^(\d+)\.\s*(.+)\.csv$/i;
+
+      /** @returns {{order: number|null, title: string}} */
+      function parseDayFile(fileName) {
+        const match = DAY_FILE.exec(fileName);
+        if (match) return { order: Number(match[1]), title: match[2] };
+        return { order: null, title: fileName.replace(/\.csv$/i, "") };
+      }
+
+      /** Numbered days first (numerically), then the rest alphabetically. */
+      const compareDays = (a, b) => (a.order ?? Infinity) - (b.order ?? Infinity)
+        || a.title.localeCompare(b.title, "pl");
+
+      /** Rejects absolute paths, backslashes, `..` and empty segments. */
+      function isSafePath(path) {
+        if (typeof path !== "string" || path === "") return false;
+        if (/^([a-zA-Z]:|[\\/])/.test(path) || /[\\\0]/.test(path)) return false;
+        return path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+      }
+
+      const makeKey = (trip, file) => `${trip}/${file}`;
+
+      /** @returns {{trip: string, file: string}|null} null for junk and unsafe entries */
+      function locateEntry(path) {
+        if (!isSafePath(path)) return null;
+        const parts = path.split("/");
+        const file = parts[parts.length - 1];
+        const hidden = parts.some((part) => part.startsWith("."));
+        if (hidden || parts[0] === "__MACOSX" || !/\.csv$/i.test(file)) return null;
+        return { trip: parts.length >= 2 ? parts[parts.length - 2] : CONFIG.OTHER_TRIP, file };
+      }
+
+      /** Flat files use a `trip__day.csv` prefix; others go to the default trip. */
+      function locateFlatFile(name) {
+        if (!isSafePath(name) || name.includes("/") || !/\.csv$/i.test(name)) return null;
+        const split = name.indexOf("__");
+        if (split > 0 && split < name.length - 2) {
+          return { trip: name.slice(0, split), file: name.slice(split + 2) };
+        }
+        return { trip: CONFIG.OTHER_TRIP, file: name };
+      }
+
+      function parseIndexDay(day) {
+        if (!isSafePath(day?.file) || !/\.csv$/i.test(day.file)) return null;
+        const fromName = parseDayFile(day.file.split("/").pop());
+        return {
+          key: day.file,
+          order: Number.isInteger(day.order) ? day.order : fromName.order,
+          title: typeof day.title === "string" && day.title !== "" ? day.title : fromName.title,
+          source: "builtin",
+          overridden: false,
+        };
+      }
+
+      /**
+       * Validates data/index.json and returns its trips (invalid entries are dropped).
+       * @param {unknown} json
+       * @returns {{id: string, name: string, days: object[]}[]}
+       */
+      function parseIndex(json) {
+        if (json?.version !== CONFIG.INDEX_VERSION || !Array.isArray(json.trips)) return [];
+        return json.trips
+          .filter((trip) => typeof trip?.id === "string" && Array.isArray(trip.days))
+          .map((trip) => ({
+            id: trip.id,
+            name: typeof trip.name === "string" ? trip.name : trip.id,
+            days: trip.days.map(parseIndexDay).filter(Boolean),
+          }));
+      }
+
+      /**
+       * Merges built-in trips with phone files; the phone version wins on conflict.
+       * @param {{id: string, name: string, days: object[]}[]} builtinTrips
+       * @param {{key: string, trip: string, order: number|null, title: string}[]} locals
+       */
+      function mergeLibrary(builtinTrips, locals) {
+        const trips = new Map();
+        for (const trip of builtinTrips) {
+          trips.set(trip.id, { id: trip.id, name: trip.name, days: new Map(trip.days.map((d) => [d.key, d])) });
+        }
+        for (const record of locals) {
+          if (!trips.has(record.trip)) {
+            trips.set(record.trip, { id: record.trip, name: record.trip, days: new Map() });
+          }
+          const days = trips.get(record.trip).days;
+          days.set(record.key, {
+            key: record.key,
+            order: record.order,
+            title: record.title,
+            source: "local",
+            overridden: days.has(record.key),
+          });
+        }
+        return [...trips.values()]
+          .map((trip) => ({ ...trip, days: [...trip.days.values()].sort(compareDays) }))
+          .sort((a, b) => a.name.localeCompare(b.name, "pl"));
+      }
+
+      /** Encodes each path segment so names with spaces and Polish letters are valid URLs. */
+      const builtinUrl = (file) => CONFIG.DATA_DIR + file.split("/").map(encodeURIComponent).join("/");
+
+      return {
+        parseDayFile, compareDays, isSafePath, makeKey, locateEntry, locateFlatFile,
+        parseIndex, mergeLibrary, builtinUrl,
+      };
+    })();
+
+    /* ===== Library (data/ + IndexedDB) ===== */
+    const Library = (() => {
+      let db = null;
+      let builtinTrips = [];
+      let jsZipPromise = null;
+      const memoryFiles = new Map();
+
+      function openDb() {
+        return new Promise((resolve) => {
+          try {
+            const request = indexedDB.open(CONFIG.DB_NAME, CONFIG.DB_VERSION);
+            request.onupgradeneeded = () => {
+              request.result.createObjectStore(CONFIG.DB_STORE, { keyPath: "key" });
+            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => {
+              console.error("IndexedDB open failed", request.error);
+              resolve(null);
+            };
+          } catch (error) {
+            console.error("IndexedDB unavailable", error);
+            resolve(null);
+          }
+        });
+      }
+
+      function runTx(mode, action) {
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(CONFIG.DB_STORE, mode);
+          const request = action(tx.objectStore(CONFIG.DB_STORE));
+          tx.oncomplete = () => resolve(request?.result);
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error);
+        });
+      }
+
+      const localAll = async () => (db ? runTx("readonly", (s) => s.getAll()) : [...memoryFiles.values()]);
+
+      const localGet = async (key) => (db ? runTx("readonly", (s) => s.get(key)) : memoryFiles.get(key));
+
+      async function localPut(records) {
+        if (!db) {
+          records.forEach((record) => memoryFiles.set(record.key, record));
+          return;
+        }
+        await runTx("readwrite", (store) => {
+          records.forEach((record) => store.put(record));
+        });
+      }
+
+      async function localDelete(key) {
+        if (!db) memoryFiles.delete(key);
+        else await runTx("readwrite", (store) => store.delete(key));
+      }
+
+      async function loadBuiltinIndex() {
+        try {
+          const json = await Net.fetchJson(CONFIG.INDEX_URL, { retries: 0, cache: "no-store" });
+          builtinTrips = LibraryCore.parseIndex(json);
+        } catch (error) {
+          builtinTrips = [];
+          if (!(error instanceof Net.NetworkError)) console.error("Index load failed", error);
+        }
+      }
+
+      /**
+       * Opens IndexedDB and reads the built-in index. Missing index is not an error.
+       * @returns {Promise<{persistent: boolean}>}
+       */
+      async function init() {
+        db = await openDb();
+        await loadBuiltinIndex();
+        return { persistent: db !== null };
+      }
+
+      /** @returns {Promise<object[]>} merged trips -> days tree */
+      async function list() {
+        return LibraryCore.mergeLibrary(builtinTrips, await localAll());
+      }
+
+      /**
+       * Returns the CSV text of a day (phone version first).
+       * @param {string} key
+       * @param {{signal?: AbortSignal}} [options]
+       * @returns {Promise<{text: string, label: string}>}
+       */
+      async function load(key, { signal } = {}) {
+        const local = await localGet(key);
+        if (local) return { text: local.text, label: local.title };
+        const day = builtinTrips.flatMap((trip) => trip.days).find((d) => d.key === key);
+        if (!day) throw new Error(`Unknown day: ${key}`);
+        const buffer = await Net.fetchBuffer(LibraryCore.builtinUrl(day.key), { signal });
+        return { text: CSV.decode(buffer), label: day.title };
+      }
+
+      /** Deletes a phone file; built-in files are read-only. */
+      async function remove(key) {
+        await localDelete(key);
+      }
+
+      function loadJsZip() {
+        if (window.JSZip) return Promise.resolve(window.JSZip);
+        jsZipPromise ??= new Promise((resolve, reject) => {
+          const script = Util.el("script", {
+            src: CONFIG.JSZIP_URL,
+            integrity: CONFIG.JSZIP_SRI,
+            crossorigin: "anonymous",
+          });
+          script.addEventListener("load", () => resolve(window.JSZip));
+          script.addEventListener("error", () => {
+            jsZipPromise = null;
+            reject(new Net.NetworkError("JSZip failed to load"));
+          });
+          document.head.append(script);
+        });
+        return jsZipPromise;
+      }
+
+      async function readZip(file) {
+        if (file.size > CONFIG.MAX_ZIP_BYTES) return { entries: [], rejected: 1 };
+        const JSZip = await loadJsZip();
+        const zip = await JSZip.loadAsync(await file.arrayBuffer());
+        const found = [];
+        zip.forEach((path, entry) => {
+          const location = entry.dir ? null : LibraryCore.locateEntry(path);
+          if (location) found.push({ ...location, entry });
+        });
+        if (found.length > CONFIG.MAX_ZIP_ENTRIES) return { entries: [], rejected: 1 };
+        const entries = [];
+        let rejected = 0;
+        for (const { entry, ...location } of found) {
+          const buffer = await entry.async("arraybuffer");
+          if (buffer.byteLength > CONFIG.MAX_CSV_BYTES) rejected += 1;
+          else entries.push({ ...location, buffer });
+        }
+        return { entries, rejected };
+      }
+
+      async function readFile(file) {
+        if (/\.zip$/i.test(file.name)) return readZip(file);
+        const location = LibraryCore.locateFlatFile(file.name);
+        if (!location) return { entries: [], rejected: 0 };
+        if (file.size > CONFIG.MAX_CSV_BYTES) return { entries: [], rejected: 1 };
+        return { entries: [{ ...location, buffer: await file.arrayBuffer() }], rejected: 0 };
+      }
+
+      function toRecord({ trip, file, buffer }) {
+        const { order, title } = LibraryCore.parseDayFile(file);
+        return {
+          key: LibraryCore.makeKey(trip, file),
+          trip,
+          order,
+          title,
+          text: CSV.decode(buffer),
+          addedAt: Date.now(),
+        };
+      }
+
+      /**
+       * Imports ZIP and CSV files into the phone library.
+       * @param {File[]} files
+       * @param {{confirmOverwrite: (count: number) => Promise<boolean>}} options
+       * @returns {Promise<{added: number, skipped: number}>}
+       */
+      async function importFiles(files, { confirmOverwrite }) {
+        const records = new Map();
+        let skipped = 0;
+        for (const file of files) {
+          const { entries, rejected } = await readFile(file);
+          skipped += rejected;
+          entries.map(toRecord).forEach((record) => records.set(record.key, record));
+        }
+        const existing = new Set((await localAll()).map((record) => record.key));
+        const conflicts = [...records.keys()].filter((key) => existing.has(key));
+        if (conflicts.length > 0 && !(await confirmOverwrite(conflicts.length))) {
+          conflicts.forEach((key) => records.delete(key));
+          skipped += conflicts.length;
+        }
+        await localPut([...records.values()]);
+        return { added: records.size, skipped };
+      }
+
+      return { init, list, load, remove, importFiles };
+    })();
+
+    /* ===== Geocoder ===== */
+    const Geocoder = (() => {
+      let lastRequestAt = 0;
+
+      const PROVIDERS = [
+        {
+          name: "nominatim",
+          url: (q) => `${CONFIG.NOMINATIM_URL}?${new URLSearchParams({
+            format: "jsonv2", limit: "1", "accept-language": "pl", q,
+          })}`,
+          parse: Model.parseNominatim,
+        },
+        {
+          name: "photon",
+          url: (q) => `${CONFIG.PHOTON_URL}?${new URLSearchParams({ limit: "1", q })}`,
+          parse: Model.parsePhoton,
+        },
+      ];
+
+      const readCache = () => Store.get("geocache", {});
+      const cacheKey = (address, city) => Model.normalizeAddress(Model.buildQuery(address, city));
+
+      /**
+       * Stores coordinates for an address (also used for manual entries).
+       * @param {string} address
+       * @param {{lat: number, lon: number}} coords
+       * @param {string} [city]
+       */
+      function remember(address, coords, city = "") {
+        const key = cacheKey(address, city);
+        const cache = readCache();
+        delete cache[key];
+        cache[key] = { lat: coords.lat, lon: coords.lon };
+        const keys = Object.keys(cache);
+        keys.slice(0, Math.max(0, keys.length - CONFIG.GEOCACHE_MAX)).forEach((k) => delete cache[k]);
+        Store.set("geocache", cache);
+      }
+
+      // Keeps the public geocoders under their 1 request/s limit.
+      async function throttle(signal) {
+        const wait = lastRequestAt + CONFIG.GEOCODE_INTERVAL_MS - Date.now();
+        if (wait > 0) await Net.sleep(wait, signal);
+        lastRequestAt = Date.now();
+      }
+
+      async function search(provider, query, signal) {
+        await throttle(signal);
+        const json = await Net.fetchJson(provider.url(query), {
+          retries: CONFIG.GEOCODE_RETRIES,
+          signal,
+        });
+        return provider.parse(json);
+      }
+
+      /**
+       * Resolves an address: cache, then Nominatim, then Photon.
+       * @param {string} address
+       * @param {{signal?: AbortSignal, city?: string}} [options]
+       * @returns {Promise<{lat: number, lon: number}|null>} null when nothing was found
+       * @throws {Net.NetworkError} when every provider failed
+       */
+      async function geocode(address, { signal, city = "" } = {}) {
+        const cached = readCache()[cacheKey(address, city)];
+        if (cached && Model.validCoords(cached.lat, cached.lon)) return cached;
+        const query = Model.buildQuery(address, city);
+        let errors = 0;
+        let lastError = null;
+        for (const provider of PROVIDERS) {
+          try {
+            const coords = await search(provider, query, signal);
+            if (coords) {
+              remember(address, coords, city);
+              return coords;
+            }
+          } catch (error) {
+            if (error.name === "AbortError") throw error;
+            console.error("Geocoding failed", provider.name, error);
+            errors += 1;
+            lastError = error;
+          }
+        }
+        if (errors === PROVIDERS.length) throw lastError;
+        return null;
+      }
+
+      return { geocode, remember };
+    })();
+
+    /* ===== Router ===== */
+    const Router = (() => {
+      let nextSlot = 0;
+      const readCache = () => Store.get("routecache", {});
+
+      // Both return OSRM-shaped JSON with GeoJSON geometry, so one parser serves them.
+      const PROVIDERS = [
+        {
+          name: "osrm",
+          failures: 0,
+          url: (a, b) => `${CONFIG.ROUTER_URL}${a.lon},${a.lat};${b.lon},${b.lat}`
+            + "?overview=full&geometries=geojson",
+        },
+        {
+          name: "valhalla",
+          failures: 0,
+          url: (a, b) => `${CONFIG.VALHALLA_URL}?${new URLSearchParams({
+            json: JSON.stringify({
+              locations: [{ lat: a.lat, lon: a.lon }, { lat: b.lat, lon: b.lon }],
+              costing: "pedestrian",
+              format: "osrm",
+              shape_format: "geojson",
+              narrative: false,
+            }),
+          })}`,
+        },
+      ];
+
+      // Spaces request starts so parallel workers do not burst the public instance.
+      async function throttle(signal) {
+        const now = Date.now();
+        const start = Math.max(now, nextSlot);
+        nextSlot = start + CONFIG.ROUTE_INTERVAL_MS;
+        if (start > now) await Net.sleep(start - now, signal);
+      }
+
+      function remember(key, route) {
+        const cache = readCache();
+        delete cache[key];
+        cache[key] = { c: route.coords, d: route.distance, t: route.duration };
+        const keys = Object.keys(cache);
+        keys.slice(0, Math.max(0, keys.length - CONFIG.ROUTECACHE_MAX)).forEach((k) => delete cache[k]);
+        Store.set("routecache", cache);
+      }
+
+      /**
+       * Walking route between two points: cache, then OSRM, then Valhalla.
+       * @param {{lat: number, lon: number}} a
+       * @param {{lat: number, lon: number}} b
+       * @param {{signal?: AbortSignal}} [options]
+       * @returns {Promise<{coords: number[][], distance: number, duration: number}>}
+       * @throws {Net.NetworkError|Net.RateLimitError|Net.ParseError}
+       */
+      async function route(a, b, { signal } = {}) {
+        const key = Model.routeKey(a, b);
+        const hit = readCache()[key];
+        if (Array.isArray(hit?.c) && Number.isFinite(hit.d) && Number.isFinite(hit.t)) {
+          return { coords: hit.c, distance: hit.d, duration: hit.t };
+        }
+        await throttle(signal);
+        const candidates = PROVIDERS.filter((p) => p.failures < CONFIG.PROVIDER_MAX_FAILURES);
+        let lastError = new Net.NetworkError("No routing provider available");
+        for (const [index, provider] of candidates.entries()) {
+          // Only the last provider retries; earlier ones hand over quickly.
+          const retries = index === candidates.length - 1 ? CONFIG.ROUTE_RETRIES : 0;
+          try {
+            const json = await Net.fetchJson(provider.url(a, b), {
+              retries,
+              timeoutMs: CONFIG.ROUTE_TIMEOUT_MS,
+              signal,
+            });
+            const parsed = Model.parseOsrm(json);
+            if (!parsed) throw new Net.ParseError("Unexpected router response");
+            provider.failures = 0;
+            const result = { ...parsed, coords: Model.simplifyRoute(parsed.coords) };
+            remember(key, result);
+            return result;
+          } catch (error) {
+            if (error.name === "AbortError") throw error;
+            console.error("Routing failed", provider.name, error);
+            if (error instanceof Net.NetworkError) provider.failures += 1;
+            lastError = error;
+          }
+        }
+        throw lastError;
+      }
+
+      /** Gives providers that were marked unreachable another chance. */
+      function reset() {
+        PROVIDERS.forEach((provider) => { provider.failures = 0; });
+      }
+
+      return { route, reset };
+    })();
+
+    /* ===== UI ===== */
+    const UI = (() => {
+      const byId = (id) => document.getElementById(id);
+      let toastTimer = 0;
+
+      /**
+       * @param {string} message Short Polish message shown in the live region.
+       * @param {number} [ms] Display time.
+       */
+      function toast(message, ms = CONFIG.TOAST_MS) {
+        const el = byId("toast");
+        el.textContent = message;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { el.textContent = ""; }, ms);
+      }
+
+      const shown = {
+        points: null, issues: null, active: null, open: false, library: null, dayKey: null, city: null,
+        segments: null, themeMode: null,
+      };
+      // On wide screens the list lives in a side panel and is always open.
+      const wideQuery = window.matchMedia(CONFIG.WIDE_QUERY);
+      const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      const THEMES = ["auto", "light", "dark"];
+
+      // "auto" follows the system theme; light and dark are the user's override.
+      function applyTheme(mode) {
+        const safeMode = THEMES.includes(mode) ? mode : "auto";
+        const resolved = safeMode === "auto" ? (darkQuery.matches ? "dark" : "light") : safeMode;
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.style.colorScheme = resolved;
+        byId("themeSelect").value = safeMode;
+        byId("themeBtn").setAttribute("aria-pressed", String(resolved === "dark"));
+        shown.themeMode = safeMode;
+      }
+
+      function renderStatic() {
+        const texts = {
+          appTitle: I18N.appName,
+          sheetToggle: I18N.sheetTitle,
+          menuTitle: I18N.menuTitle,
+          dataTitle: I18N.dataTitle,
+          settingsTitle: I18N.settingsTitle,
+          cityLabel: I18N.cityLabel,
+          themeLabel: I18N.themeLabel,
+          themeAuto: I18N.themeAuto,
+          themeLight: I18N.themeLight,
+          themeDark: I18N.themeDark,
+          retryBtn: I18N.retryGeocode,
+          libraryTitle: I18N.libraryTitle,
+          libraryEmpty: I18N.libraryEmpty,
+          importBtn: I18N.importBtn,
+          loadCsvBtn: I18N.loadCsv,
+          sampleBtn: I18N.sampleCsv,
+          clearBtn: I18N.clearData,
+          aboutTitle: I18N.aboutTitle,
+          aboutPrivacy: I18N.aboutPrivacy,
+          aboutAttribution: I18N.aboutAttribution,
+          aboutVersion: `${I18N.aboutVersion}: ${CONFIG.APP_VERSION}`,
+          aboutClose: I18N.aboutClose,
+          askOk: I18N.askOk,
+          askCancel: I18N.askCancel,
+          gpsBtn: I18N.gpsStart,
+        };
+        for (const [id, text] of Object.entries(texts)) byId(id).textContent = text;
+        const labels = {
+          menuBtn: I18N.menuOpen,
+          menuClose: I18N.menuClose,
+          themeBtn: I18N.themeToggle,
+          aboutBtn: I18N.aboutOpen,
+          gpsbar: I18N.gpsGroup,
+          centerBtn: I18N.gpsCenter,
+        };
+        for (const [id, label] of Object.entries(labels)) byId(id).setAttribute("aria-label", label);
+      }
+
+      function bindEvents(actions) {
+        const menu = byId("menu");
+        const about = byId("about");
+        const csvInput = byId("csvInput");
+        byId("menuBtn").addEventListener("click", () => menu.showModal());
+        byId("menuClose").addEventListener("click", () => menu.close());
+        byId("aboutBtn").addEventListener("click", () => about.showModal());
+        byId("aboutClose").addEventListener("click", () => about.close());
+        byId("gpsBtn").addEventListener("click", actions.onToggleGps);
+        byId("centerBtn").addEventListener("click", actions.onCenter);
+        byId("sheetToggle").addEventListener("click", actions.onToggleSheet);
+        byId("sampleBtn").addEventListener("click", actions.onSample);
+        byId("loadCsvBtn").addEventListener("click", () => csvInput.click());
+        byId("clearBtn").addEventListener("click", () => {
+          menu.close();
+          actions.onClear();
+        });
+        csvInput.addEventListener("change", () => {
+          const [file] = csvInput.files;
+          csvInput.value = "";
+          if (!file) return;
+          menu.close();
+          actions.onLoadFile(file);
+        });
+        byId("pointList").addEventListener("click", (event) => {
+          const leg = event.target.closest("[data-leg]");
+          if (leg) {
+            actions.onSelectLeg(leg.dataset.leg);
+            return;
+          }
+          const target = event.target.closest("[data-order]");
+          if (target) actions.onSelectPoint(Number(target.dataset.order), target.dataset.action);
+        });
+        byId("retryBtn").addEventListener("click", actions.onRetryGeocode);
+        byId("cityInput").addEventListener("change", (event) => {
+          actions.onCityChange(event.target.value.trim());
+        });
+        byId("themeSelect").addEventListener("change", (event) => {
+          actions.onSetTheme(event.target.value);
+        });
+        byId("themeBtn").addEventListener("click", () => {
+          actions.onSetTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+        });
+        byId("importBtn").addEventListener("click", () => byId("libraryInput").click());
+        byId("libraryInput").addEventListener("change", (event) => {
+          const files = [...event.target.files];
+          event.target.value = "";
+          if (files.length > 0) actions.onImport(files);
+        });
+        byId("libraryTree").addEventListener("click", (event) => {
+          const remove = event.target.closest("[data-delete]");
+          if (remove) {
+            actions.onDeleteDay(remove.dataset.delete, remove.dataset.title);
+            return;
+          }
+          const open = event.target.closest("[data-key]");
+          if (!open) return;
+          menu.close();
+          actions.onOpenDay(open.dataset.key);
+        });
+      }
+
+      // Keeps map controls above the sheet whatever its current height is.
+      function trackSheetHeight() {
+        const sheet = byId("sheet");
+        new ResizeObserver(() => {
+          document.documentElement.style.setProperty("--sheet-h", `${sheet.offsetHeight}px`);
+        }).observe(sheet);
+      }
+
+      /**
+       * Renders static texts and wires up UI events.
+       * @param {object} actions Callbacks supplied by App.
+       */
+      function init(actions) {
+        renderStatic();
+        bindEvents(actions);
+        trackSheetHeight();
+        wideQuery.addEventListener("change", actions.onLayoutChange);
+        darkQuery.addEventListener("change", () => applyTheme(shown.themeMode));
+      }
+
+      const STATUS_TEXT = { pending: I18N.statusPending, "no-geo": I18N.statusNoGeo };
+
+      function summaryText(s) {
+        if (s.points.length === 0) return I18N.sheetEmpty;
+        const nearest = s.gps.last && Model.nearestPoint(s.gps.last, s.points);
+        const parts = [
+          s.dayLabel,
+          Util.fmt(I18N.pointsCount, { n: s.points.length }),
+          s.issues.length > 0 && Util.fmt(I18N.issuesCount, { n: s.issues.length }),
+          walkSummary(s),
+          nearest && Util.fmt(I18N.nearestSummary, {
+            order: nearest.point.order,
+            distance: Model.formatDistance(nearest.distance),
+          }),
+          s.progress && `${s.progress.label} ${s.progress.done}/${s.progress.total}`,
+        ];
+        return parts.filter(Boolean).join(" \u00B7 ");
+      }
+
+      // Walking totals next to the planned time span from the CSV.
+      function walkSummary(s) {
+        if (s.segments.length === 0) return "";
+        const distance = s.segments.reduce((sum, seg) => sum + seg.distance, 0);
+        const duration = s.segments.reduce((sum, seg) => sum + seg.duration, 0);
+        const walk = Util.fmt(I18N.routeSummary, {
+          distance: Model.formatDistance(distance),
+          duration: Model.formatDuration(duration),
+        });
+        const span = Model.plannedSpan(s.points);
+        return span ? `${walk}, ${Util.fmt(I18N.plannedSummary, { span })}` : walk;
+      }
+
+      function pointRow(point, index, active) {
+        const badge = Util.el("span", { class: "badge", text: String(point.order) });
+        badge.style.background = Model.colorFor(index);
+        const title = Util.el(
+          "span",
+          { class: "point-title" },
+          point.time && Util.el("span", { class: "point-time", text: point.time }),
+          Util.el("span", { class: "point-name", text: point.address || `${point.lat}, ${point.lon}` }),
+        );
+        const main = Util.el(
+          "span",
+          { class: "point-main" },
+          title,
+          point.description && Util.el("span", { class: "point-meta", text: point.description }),
+          STATUS_TEXT[point.status] && Util.el("span", { class: "point-warn", text: STATUS_TEXT[point.status] }),
+        );
+        const button = Util.el(
+          "button",
+          {
+            type: "button",
+            class: "point",
+            "data-order": point.order,
+            "aria-current": String(point.order === active),
+          },
+          badge,
+          main,
+        );
+        const locate = point.status === "no-geo" && Util.el("button", {
+          type: "button",
+          class: "point-action",
+          "data-order": point.order,
+          "data-action": "locate",
+          "aria-label": Util.fmt(I18N.setCoords, { order: point.order }),
+          text: "\u2316",
+        });
+        return Util.el("li", { class: "point-row" }, button, locate);
+      }
+
+      // Walking distance and time to the next point, drawn in that segment's colour.
+      function legRow(segment, index) {
+        const walk = `${Model.formatDistance(segment.distance)} \u00B7 ${Model.formatDuration(segment.duration)}`;
+        const text = segment.status === "ok" ? walk : `\u2248 ${walk} (${I18N.legStraight})`;
+        const row = Util.el(
+          "li",
+          { class: "leg" },
+          Util.el("button", {
+            type: "button",
+            class: "leg-btn",
+            "data-leg": `${segment.from}-${segment.to}`,
+            "aria-label": Util.fmt(I18N.legFocus, { from: segment.from, to: segment.to, walk: text }),
+            text,
+          }),
+        );
+        row.style.borderLeftColor = Model.colorFor(index);
+        return row;
+      }
+
+      function renderList(s) {
+        const issues = s.issues.map((issue) => Util.el("li", {
+          text: Util.fmt(I18N.issues[issue.code], issue),
+        }));
+        byId("issueList").replaceChildren(...issues);
+        const legs = new Map(s.segments.map((seg) => [`${seg.from}-${seg.to}`, seg]));
+        const body = byId("sheetBody");
+        const scrollTop = body.scrollTop;
+        const rows = document.createDocumentFragment();
+        s.points.forEach((point, index) => {
+          rows.append(pointRow(point, index, s.activeOrder));
+          const next = s.points[index + 1];
+          const leg = next && legs.get(`${point.order}-${next.order}`);
+          if (leg) rows.append(legRow(leg, index));
+        });
+        byId("pointList").replaceChildren(rows);
+        body.scrollTop = scrollTop;
+        byId("pointList").querySelector("[aria-current=\"true\"]")?.scrollIntoView({ block: "nearest" });
+      }
+
+      // Offer a retry when a location or a walking route is missing.
+      const canRetry = (s) => s.points.some((p) => p.status === "no-geo")
+        || s.segments.some((seg) => seg.status === "fallback");
+
+      function renderSheet(s) {
+        const open = s.sheetOpen || wideQuery.matches;
+        byId("sheetToggle").setAttribute("aria-expanded", String(open));
+        byId("sheetBody").hidden = !open;
+        byId("sheetSummary").textContent = summaryText(s);
+        const bar = byId("progressBar");
+        bar.hidden = !s.progress;
+        if (s.progress) {
+          bar.max = s.progress.total;
+          bar.value = s.progress.done;
+          bar.setAttribute("aria-label", s.progress.label);
+        }
+        byId("retryBtn").hidden = !canRetry(s) || Boolean(s.progress);
+        const unchanged = shown.open === open && shown.points === s.points
+          && shown.issues === s.issues && shown.active === s.activeOrder
+          && shown.segments === s.segments;
+        if (unchanged) return;
+        Object.assign(shown, {
+          points: s.points,
+          issues: s.issues,
+          active: s.activeOrder,
+          open,
+          segments: s.segments,
+        });
+        if (open) renderList(s);
+      }
+
+      // In-app replacement for confirm()/prompt(), which some browsers block.
+      function openAsk(message, withInput) {
+        const dialog = byId("ask");
+        const input = byId("askInput");
+        byId("askMessage").textContent = message;
+        input.hidden = !withInput;
+        input.value = "";
+        dialog.returnValue = "";
+        return new Promise((resolve) => {
+          dialog.addEventListener("close", () => {
+            resolve(dialog.returnValue === "ok" ? input.value : null);
+          }, { once: true });
+          dialog.showModal();
+          if (withInput) input.focus();
+        });
+      }
+
+      /** @param {typeof state} s */
+      function render(s) {
+        const { gps } = s;
+        byId("gpsBtn").setAttribute("aria-pressed", String(gps.on));
+        const centerBtn = byId("centerBtn");
+        centerBtn.disabled = gps.last === null;
+        centerBtn.setAttribute("aria-pressed", String(gps.follow));
+        renderSheet(s);
+        renderLibrary(s);
+        if (shown.city !== s.settings.city) {
+          byId("cityInput").value = s.settings.city;
+          shown.city = s.settings.city;
+        }
+        if (shown.themeMode !== s.settings.theme) applyTheme(s.settings.theme);
+      }
+
+      function dayRow(day, currentKey) {
+        const number = day.order === null ? "" : `${day.order}. `;
+        let source = I18N.sourceBuiltin;
+        if (day.overridden) source = I18N.sourceOverridden;
+        else if (day.source === "local") source = I18N.sourceLocal;
+        const open = Util.el(
+          "button",
+          {
+            type: "button",
+            class: "day-btn",
+            "data-key": day.key,
+            "aria-current": String(day.key === currentKey),
+          },
+          Util.el("span", { class: "day-title", text: number + day.title }),
+          Util.el("span", {
+            class: "day-source",
+            "data-source": day.source,
+            text: source,
+          }),
+        );
+        const remove = day.source === "local" && Util.el("button", {
+          type: "button",
+          class: "day-delete",
+          "data-delete": day.key,
+          "data-title": day.title,
+          "aria-label": Util.fmt(I18N.deleteDay, { title: day.title }),
+          text: "\u2715",
+        });
+        return Util.el("li", { class: "day-row" }, open, remove);
+      }
+
+      function renderLibrary(s) {
+        if (shown.library === s.library && shown.dayKey === s.dayKey) return;
+        const tree = byId("libraryTree");
+        const expanded = new Set(
+          [...tree.querySelectorAll("details[open]")].map((node) => node.dataset.trip),
+        );
+        const hasCurrent = (trip) => trip.days.some((day) => day.key === s.dayKey);
+        const trips = s.library.map((trip) => {
+          const open = expanded.has(trip.id) || hasCurrent(trip) || s.library.length === 1;
+          return Util.el(
+            "details",
+            { "data-trip": trip.id, ...(open ? { open: "" } : {}) },
+            Util.el(
+              "summary",
+              {},
+              Util.el("span", { text: trip.name }),
+              Util.el("span", { class: "trip-count", text: String(trip.days.length) }),
+            ),
+            Util.el("ul", { class: "plain-list" }, ...trip.days.map((day) => dayRow(day, s.dayKey))),
+          );
+        });
+        tree.replaceChildren(...trips);
+        byId("libraryEmpty").hidden = s.library.length > 0;
+        Object.assign(shown, { library: s.library, dayKey: s.dayKey });
+      }
+
+      /** @param {string} message @returns {Promise<boolean>} */
+      const confirm = async (message) => (await openAsk(message, false)) !== null;
+
+      /** @param {string} message @returns {Promise<string|null>} null when cancelled */
+      const prompt = (message) => openAsk(message, true);
+
+      return { init, render, toast, confirm, prompt };
+    })();
+
+    /* ===== MapView ===== */
+    const MapView = (() => {
+      let map = null;
+      let gpsLayer = null;
+      let pointLayer = null;
+      let segmentLayer = null;
+      let lineRenderer = null;
+      let gpsDot = null;
+      let gpsAccuracy = null;
+      let renderedLast = null;
+      let renderedFollow = false;
+      let lastTileErrorAt = 0;
+      let onSelectPoint = () => {};
+      const markers = new Map();
+      const lines = new Map();
+
+      function onTileError() {
+        const now = Date.now();
+        if (now - lastTileErrorAt < CONFIG.TILE_ERROR_COOLDOWN_MS) return;
+        lastTileErrorAt = now;
+        UI.toast(I18N.tilesError);
+      }
+
+      /**
+       * Creates the Leaflet map. Returns false when Leaflet failed to load.
+       * @param {{onUserPan: () => void, onSelectPoint: (order: number) => void}} options
+       * @returns {boolean}
+       */
+      function init(options) {
+        const container = document.getElementById("map");
+        if (typeof L === "undefined") {
+          const p = document.createElement("p");
+          p.className = "map-error";
+          p.textContent = I18N.leafletMissing;
+          container.replaceChildren(p);
+          return false;
+        }
+        onSelectPoint = options.onSelectPoint;
+        const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        map = L.map(container, {
+          preferCanvas: true,
+          zoomControl: false,
+          zoomAnimation: !still,
+          fadeAnimation: !still,
+          markerZoomAnimation: !still,
+        }).setView(CONFIG.MAP_DEFAULT_CENTER, CONFIG.MAP_DEFAULT_ZOOM);
+        L.control.zoom({ position: "bottomright" }).addTo(map);
+        L.tileLayer(CONFIG.TILE_URL, {
+          maxZoom: CONFIG.MAP_MAX_ZOOM,
+          attribution: CONFIG.TILE_ATTRIBUTION,
+        }).on("tileerror", onTileError).addTo(map);
+        lineRenderer = L.canvas({ tolerance: CONFIG.SEGMENT_TAP_TOLERANCE });
+        segmentLayer = L.layerGroup().addTo(map);
+        pointLayer = L.layerGroup().addTo(map);
+        gpsLayer = L.layerGroup().addTo(map);
+        map.on("dragstart", options.onUserPan);
+        return true;
+      }
+
+      function popupContent(point) {
+        const { lat, lon } = point;
+        const url = "https://www.google.com/maps/dir/?api=1"
+          + `&destination=${lat},${lon}&travelmode=walking`;
+        return Util.el(
+          "div",
+          {},
+          Util.el("div", { class: "popup-title", text: `${point.order}. ${point.address}` }),
+          point.time && Util.el("p", { class: "popup-line", text: point.time }),
+          point.description && Util.el("p", { class: "popup-line", text: point.description }),
+          Util.el("a", {
+            class: "popup-link",
+            href: url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            text: I18N.navigate,
+          }),
+        );
+      }
+
+      function makeMarker({ point, index }) {
+        const badge = Util.el("span", { class: "badge", text: String(point.order) });
+        badge.style.background = Model.colorFor(index);
+        const size = CONFIG.MARKER_SIZE;
+        const icon = L.divIcon({
+          className: "pin",
+          html: badge,
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
+          popupAnchor: [0, -size / 2],
+        });
+        return L.marker([point.lat, point.lon], { icon, title: point.address })
+          .bindPopup(popupContent(point))
+          .on("click", () => onSelectPoint(point.order));
+      }
+
+      /**
+       * Adds, replaces and removes layers so that only changed items are redrawn.
+       * @param {Map} cache key -> {sig, layer}
+       * @param {{key: string|number, sig: string, data: object}[]} items
+       * @param {(data: object) => L.Layer} make
+       */
+      function syncLayers(group, cache, items, make) {
+        const seen = new Set();
+        for (const { key, sig, data } of items) {
+          seen.add(key);
+          const cached = cache.get(key);
+          if (cached?.sig === sig) continue;
+          if (cached) group.removeLayer(cached.layer);
+          cache.set(key, { sig, layer: make(data).addTo(group) });
+        }
+        for (const [key, cached] of cache) {
+          if (seen.has(key)) continue;
+          group.removeLayer(cached.layer);
+          cache.delete(key);
+        }
+      }
+
+      function drawPoints(points) {
+        const items = [];
+        points.forEach((point, index) => {
+          if (!Model.hasCoords(point)) return;
+          const sig = [point.lat, point.lon, index, point.address, point.time, point.description]
+            .join("|");
+          items.push({ key: point.order, sig, data: { point, index } });
+        });
+        syncLayers(pointLayer, markers, items, makeMarker);
+      }
+
+      function segmentPopup(segment) {
+        const values = {
+          from: segment.from,
+          to: segment.to,
+          distance: Model.formatDistance(segment.distance),
+          duration: Model.formatDuration(segment.duration),
+        };
+        const template = segment.status === "ok" ? I18N.segmentLabel : I18N.segmentFallback;
+        return Util.el("div", { text: Util.fmt(template, values) });
+      }
+
+      // Odd segments are dashed so overlapping stretches stay distinguishable.
+      function makeLine({ segment, index }) {
+        const fallback = segment.status === "fallback";
+        let dashArray = index % 2 === 1 ? CONFIG.SEGMENT_DASH : null;
+        if (fallback) dashArray = CONFIG.FALLBACK_DASH;
+        return L.polyline(segment.coords, {
+          renderer: lineRenderer,
+          color: Model.colorFor(index),
+          weight: fallback ? CONFIG.FALLBACK_WEIGHT : CONFIG.SEGMENT_WEIGHT,
+          opacity: CONFIG.SEGMENT_OPACITY,
+          dashArray,
+        }).bindPopup(segmentPopup(segment));
+      }
+
+      function drawSegments({ points, segments }) {
+        const indexByOrder = new Map(points.map((p, i) => [p.order, i]));
+        const items = segments.map((segment) => {
+          const index = indexByOrder.get(segment.from) ?? 0;
+          const sig = [segment.status, segment.coords.length, segment.distance, index].join("|");
+          return { key: `${segment.from}-${segment.to}`, sig, data: { segment, index } };
+        });
+        syncLayers(segmentLayer, lines, items, makeLine);
+      }
+
+      /**
+       * Centres the map on a point and opens its popup.
+       * @param {number} order
+       * @returns {boolean} false when the point has no marker yet
+       */
+      function focusPoint(order) {
+        const marker = markers.get(order)?.layer;
+        if (!map || !marker) return false;
+        map.setView(marker.getLatLng(), Math.max(map.getZoom(), CONFIG.FOCUS_ZOOM));
+        marker.openPopup();
+        return true;
+      }
+
+      /** @param {Point[]} points Fits the view to all points that have coordinates. */
+      function fitAll(points) {
+        const coords = points.filter(Model.hasCoords).map((p) => [p.lat, p.lon]);
+        if (!map || coords.length === 0) return;
+        map.fitBounds(L.latLngBounds(coords), fitOptions());
+      }
+
+      // Leaves room for the side panel on wide screens and the bottom sheet on phones.
+      function fitOptions() {
+        const wide = window.matchMedia(CONFIG.WIDE_QUERY).matches;
+        const left = CONFIG.PANEL_WIDTH_PX + CONFIG.FIT_PADDING_TOP_LEFT[0];
+        return {
+          paddingTopLeft: wide ? [left, CONFIG.FIT_PADDING_TOP_LEFT[1]] : CONFIG.FIT_PADDING_TOP_LEFT,
+          paddingBottomRight: wide ? [40, 40] : CONFIG.FIT_PADDING_BOTTOM_RIGHT,
+          maxZoom: CONFIG.FIT_MAX_ZOOM,
+        };
+      }
+
+      /**
+       * Fits the view to one route segment and opens its popup.
+       * @param {string} key Segment id, e.g. "2-3"
+       * @returns {boolean} false when the segment is not drawn yet
+       */
+      function focusSegment(key) {
+        const line = lines.get(key)?.layer;
+        if (!map || !line) return false;
+        map.fitBounds(line.getBounds(), fitOptions());
+        line.openPopup(line.getCenter());
+        return true;
+      }
+
+      function drawPosition(last) {
+        const latlng = [last.lat, last.lon];
+        if (gpsDot) {
+          gpsDot.setLatLng(latlng);
+          gpsAccuracy.setLatLng(latlng).setRadius(last.accuracy);
+          return;
+        }
+        gpsAccuracy = L.circle(latlng, {
+          radius: last.accuracy,
+          color: CONFIG.GPS_COLOR,
+          weight: 1,
+          fillOpacity: 0.12,
+          interactive: false,
+        }).addTo(gpsLayer);
+        gpsDot = L.circleMarker(latlng, {
+          radius: CONFIG.GPS_DOT_RADIUS,
+          color: CONFIG.GPS_OUTLINE_COLOR,
+          weight: 3,
+          fillColor: CONFIG.GPS_COLOR,
+          fillOpacity: 1,
+          interactive: false,
+        }).addTo(gpsLayer);
+      }
+
+      function clearPosition() {
+        gpsLayer.clearLayers();
+        gpsDot = null;
+        gpsAccuracy = null;
+      }
+
+      function followPosition(last) {
+        const latlng = [last.lat, last.lon];
+        if (map.getZoom() < CONFIG.GPS_FOLLOW_ZOOM) map.setView(latlng, CONFIG.GPS_FOLLOW_ZOOM);
+        else map.panTo(latlng);
+      }
+
+      /** @param {typeof state} s */
+      function render(s) {
+        if (!map) return;
+        drawSegments(s);
+        drawPoints(s.points);
+        const { gps } = s;
+        const moved = gps.last !== renderedLast;
+        if (gps.last === null) {
+          if (renderedLast !== null) clearPosition();
+        } else {
+          if (moved) drawPosition(gps.last);
+          if (gps.follow && (moved || !renderedFollow)) followPosition(gps.last);
+        }
+        renderedLast = gps.last;
+        renderedFollow = gps.follow;
+      }
+
+      return { init, render, focusPoint, focusSegment, fitAll };
+    })();
+
+    /* ===== Gps ===== */
+    const Gps = (() => {
+      let watchId = null;
+      let wakeLock = null;
+      let lastAcceptedAt = 0;
+
+      function patchGps(patch) {
+        setState({ gps: { ...state.gps, ...patch } });
+      }
+
+      async function requestWakeLock() {
+        if (!("wakeLock" in navigator)) return;
+        try {
+          const lock = await navigator.wakeLock.request("screen");
+          if (watchId === null) {
+            lock.release().catch((error) => console.error("Wake Lock release failed", error));
+            return;
+          }
+          wakeLock = lock;
+          lock.addEventListener("release", () => {
+            if (wakeLock === lock) wakeLock = null;
+          });
+        } catch (error) {
+          console.error("Wake Lock request failed", error);
+        }
+      }
+
+      function releaseWakeLock() {
+        const lock = wakeLock;
+        wakeLock = null;
+        lock?.release().catch((error) => console.error("Wake Lock release failed", error));
+      }
+
+      function onPosition(position) {
+        const now = Date.now();
+        if (now - lastAcceptedAt < CONFIG.GPS_RENDER_MS) return;
+        lastAcceptedAt = now;
+        const { latitude, longitude, accuracy } = position.coords;
+        patchGps({
+          last: { lat: latitude, lon: longitude, accuracy, ts: position.timestamp },
+        });
+      }
+
+      function onError(error) {
+        console.error("Geolocation error", error.code, error.message);
+        if (error.code === error.PERMISSION_DENIED) {
+          stop();
+          UI.toast(I18N.gpsDenied, CONFIG.TOAST_LONG_MS);
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          UI.toast(I18N.gpsUnavailable);
+        } else if (error.code === error.TIMEOUT) {
+          UI.toast(I18N.gpsTimeout);
+        } else {
+          UI.toast(I18N.gpsError);
+        }
+      }
+
+      /** Starts tracking. Must be called from a user gesture to trigger the permission prompt. */
+      function start() {
+        if (watchId !== null) return;
+        if (!window.isSecureContext) {
+          UI.toast(I18N.gpsInsecure, CONFIG.TOAST_LONG_MS);
+          return;
+        }
+        if (!navigator.geolocation) {
+          UI.toast(I18N.gpsUnsupported);
+          return;
+        }
+        lastAcceptedAt = 0;
+        watchId = navigator.geolocation.watchPosition(onPosition, onError, CONFIG.GPS_OPTIONS);
+        patchGps({ on: true, follow: true });
+        requestWakeLock();
+      }
+
+      /** Stops tracking and clears the last known position. */
+      function stop() {
+        if (watchId === null) return;
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        releaseWakeLock();
+        patchGps({ on: false, follow: false, last: null });
+      }
+
+      /** @param {boolean} value Whether the map should follow the user's position. */
+      function setFollow(value) {
+        if (state.gps.follow === value) return;
+        if (value && state.gps.last === null) return;
+        patchGps({ follow: value });
+      }
+
+      /** Re-acquires the wake lock when the page becomes visible again. */
+      function init() {
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible" && watchId !== null && !wakeLock) {
+            requestWakeLock();
+          }
+        });
+      }
+
+      return { init, start, stop, setFollow };
+    })();
+
+    /* ===== Self test (open with ?selftest) ===== */
+    function selfTest() {
+      let failed = 0;
+      const check = (name, ok) => {
+        if (!ok) failed += 1;
+        console.assert(ok, `selftest failed: ${name}`);
+      };
+      const toPoints = (text) => CSV.toPoints(CSV.parse(text));
+
+      check("quoted separator", CSV.parse("a;\"b;c\";d")[0][1] === "b;c");
+      check("escaped quote", CSV.parse("\"x \"\"y\"\"\";2")[0][0] === "x \"y\"");
+      check("BOM", CSV.parse("\uFEFForder,address\n1,A")[0][0] === "order");
+      check("tab separator", CSV.parse("1\tA\t09:00")[0].length === 3);
+      check("CRLF and blank rows", CSV.parse("1,A\r\n\r\n2,B\r\n").length === 2);
+      check("windows-1250 fallback", CSV.decode(new Uint8Array([0xb3]).buffer) === "\u0142");
+      const sorted = toPoints("order_no;address\n10;J\n9;I\n2;B");
+      check("alias header + numeric sort", sorted.points.map((p) => p.order).join() === "2,9,10");
+      check("duplicate order", toPoints("order,address\n1,A\n1,B").issues[0].code === "duplicate");
+      check("missing address", toPoints("order,address\n1,").issues[0].code === "noAddress");
+      const coords = toPoints("order,address,lat,lon\n1,A,\"51,5\",15.25\n2,B,95,10");
+      check("decimal comma", coords.points[0].lat === 51.5 && coords.points[0].status === "ok");
+      check("bad coords fall back to address", coords.issues[0].code === "badCoords");
+      check("headerless default columns", toPoints("1;Rynek;09:00;opis").points[0].time === "09:00");
+      const many = Array.from({ length: CONFIG.MAX_POINTS + 5 }, (_, i) => `${i + 1},A`).join("\n");
+      const limited = toPoints(many);
+      check("point limit", limited.points.length === CONFIG.MAX_POINTS && limited.issues[0].code === "tooMany");
+      check("palette wraps", Model.colorFor(10) === Model.colorFor(0));
+      selfTestLibrary(check);
+      selfTestGeo(check);
+      selfTestRouting(check);
+      selfTestStorage(check);
+      console.info(failed === 0 ? "selftest: all passed" : `selftest: ${failed} failed`);
+    }
+
+    function selfTestStorage(check) {
+      const saved = Model.restoreSaved({
+        dayKey: 5,
+        issues: [{ line: 2, code: "noAddress" }, { line: 3, code: "bogus" }],
+        points: [
+          { order: 1, address: "A", lat: 41.9, lon: 12.4, status: "ok" },
+          { order: 2, address: "B", lat: 999, lon: 1, status: "ok" },
+          { order: 3, address: "C", status: "no-geo" },
+          { address: "no order" },
+        ],
+      });
+      check("restore drops invalid", saved.points.map((p) => p.order).join() === "1,2,3");
+      check("restore statuses", saved.points.map((p) => p.status).join() === "ok,pending,no-geo");
+      check("restore issues", saved.issues.length === 1 && saved.dayKey === null);
+      check("restore empty", Model.restoreSaved(null) === null && Model.restoreSaved({ points: [] }) === null);
+    }
+
+    function selfTestRouting(check) {
+      const meters = Model.haversine({ lat: 0, lon: 0 }, { lat: 0, lon: 1 });
+      check("haversine 1 degree", Math.abs(meters - 111195) < 100);
+      check("haversine zero", Model.haversine({ lat: 5, lon: 5 }, { lat: 5, lon: 5 }) === 0);
+      const line = [[0, 0], [0, 1], [0, 2], [1, 3]];
+      check("simplify drops collinear", Model.simplify(line, 0.001).length === 3);
+      check("simplify keeps ends", Model.simplify([[0, 0], [1, 1]], 1).length === 2);
+      const a = { lat: 41.123456, lon: 12.1 };
+      const b = { lat: 41.2, lon: 12.2 };
+      check("route key rounding", Model.routeKey(a, b) === "41.12346,12.10000|41.20000,12.20000");
+      const osrm = Model.parseOsrm({
+        code: "Ok",
+        routes: [{ distance: 10, duration: 5, geometry: { coordinates: [[12, 41], [12.1, 41.1]] } }],
+      });
+      check("osrm lat/lon swap", osrm?.coords[0][0] === 41 && osrm.coords[0][1] === 12);
+      check("osrm malformed", [null, { code: "NoRoute" }, { code: "Ok", routes: [] }]
+        .every((json) => Model.parseOsrm(json) === null));
+      const pts = [1, 2, 3, 4].map((order) => ({ order, lat: order === 3 ? null : 1, lon: 1 }));
+      check("segments skip missing", Model.segmentPairs(pts).map((p) => p.id).join() === "1-2");
+      check("format meters", Model.formatDistance(850.4) === "850 m");
+      check("format km", Model.formatDistance(4098.8) === "4,1 km");
+      check("format minutes", Model.formatDuration(612) === "10 min");
+      check("format hours", Model.formatDuration(3280) === "55 min" && Model.formatDuration(5400) === "1 h 30 min");
+      check("planned span", Model.plannedSpan([{ time: "07:20" }, { time: "18:00–19:15" }]) === "07:20\u201319:15");
+      check("planned span none", Model.plannedSpan([{ time: "rano" }]) === "");
+      const near = Model.nearestPoint({ lat: 0, lon: 0 }, [
+        { order: 1, lat: 0, lon: 1 }, { order: 2, lat: 0, lon: 0.1 }, { order: 3, lat: null, lon: null },
+      ]);
+      check("nearest point", near?.point.order === 2);
+    }
+
+    function selfTestGeo(check) {
+      check("normalize address", Model.normalizeAddress("  Rynek   1, ZG ") === "rynek 1, zg");
+      check("city appended", Model.buildQuery("Rynek 1", "Zielona Góra") === "Rynek 1, Zielona Góra");
+      check("city skipped", Model.buildQuery("Rynek 1, Roma", "Zielona Góra") === "Rynek 1, Roma");
+      const nominatim = Model.parseNominatim([{ lat: "41.9", lon: "12.4" }]);
+      check("nominatim parse", nominatim?.lat === 41.9 && nominatim.lon === 12.4);
+      check("nominatim empty", Model.parseNominatim([]) === null && Model.parseNominatim({}) === null);
+      const photon = Model.parsePhoton({ features: [{ geometry: { coordinates: [12.4, 41.9] } }] });
+      check("photon lon/lat order", photon?.lat === 41.9 && photon.lon === 12.4);
+      check("photon malformed", Model.parsePhoton({ features: [] }) === null);
+      const inputs = ["41.9, 12.45", "41,9;12,45", "41.9 12.45", "41.9,12.45", "41,9 12,45"];
+      check("manual coords formats", inputs.every((t) => CSV.parseLatLon(t)?.lon === 12.45));
+      check("manual coords invalid", ["", "abc", "91, 10", "1, 2, 3"].every((t) => CSV.parseLatLon(t) === null));
+    }
+
+    function selfTestLibrary(check) {
+      const days = ["10. j.csv", "9. i.csv", "b.csv", "a.csv", "2. x.csv"]
+        .map(LibraryCore.parseDayFile).sort(LibraryCore.compareDays);
+      check("day sort", days.map((d) => d.title).join() === "x,i,j,a,b");
+      check("day with spaces", LibraryCore.parseDayFile("3.   day - x.csv").title === "day - x");
+      check("unsafe paths", ["../a.csv", "/a.csv", "a\\b.csv", "C:/a.csv", "a//b.csv"]
+        .every((p) => !LibraryCore.isSafePath(p)));
+      check("zip junk skipped", ["__MACOSX/r/1. a.csv", "r/.hidden.csv", "r/readme.txt"]
+        .every((p) => LibraryCore.locateEntry(p) === null));
+      check("zip trip from folder", LibraryCore.locateEntry("x/rzym/1. a.csv").trip === "rzym");
+      check("zip root file", LibraryCore.locateEntry("1. a.csv").trip === CONFIG.OTHER_TRIP);
+      check("flat prefix", LibraryCore.locateFlatFile("rzym__1. a.csv").trip === "rzym");
+      const index = LibraryCore.parseIndex({
+        version: 1,
+        trips: [{ id: "rzym", days: [{ file: "rzym/1. a.csv" }, { file: "../x.csv" }] }, {}],
+      });
+      check("index validation", index.length === 1 && index[0].days.length === 1);
+      check("index version", LibraryCore.parseIndex({ version: 2, trips: [] }).length === 0);
+      const merged = LibraryCore.mergeLibrary(index, [
+        { key: "rzym/1. a.csv", trip: "rzym", order: 1, title: "a" },
+        { key: "rzym/2. b.csv", trip: "rzym", order: 2, title: "b" },
+      ]);
+      const [first, second] = merged[0].days;
+      check("local wins", first.source === "local" && first.overridden && !second.overridden);
+      check("builtin url encoding", LibraryCore.builtinUrl("r z/1. \u0105.csv") === "data/r%20z/1.%20%C4%85.csv");
+    }
+
+    /* ===== Planner (geocode pipeline) ===== */
+    const Planner = (() => {
+      /** Applies `patch` to the points whose order is in `orders`. */
+      function updatePoints(orders, patch) {
+        const wanted = new Set(orders);
+        setState({
+          points: state.points.map((p) => (wanted.has(p.order) ? { ...p, ...patch } : p)),
+        });
+      }
+
+      /** @returns {Promise<boolean>} false when stopped early (cancelled or geocoder down) */
+      async function geocodePending(signal) {
+        const pending = state.points.filter((p) => p.status === "pending");
+        if (pending.length === 0) return true;
+        if (!navigator.onLine) {
+          updatePoints(pending.map((p) => p.order), { status: "no-geo" });
+          UI.toast(I18N.geocodeOffline);
+          return false;
+        }
+        let failures = 0;
+        for (const [index, point] of pending.entries()) {
+          setState({ progress: { label: I18N.geocoding, done: index, total: pending.length } });
+          try {
+            const city = state.settings.city;
+            const coords = await Geocoder.geocode(point.address, { signal, city });
+            if (signal.aborted) return false;
+            updatePoints([point.order], coords ? { ...coords, status: "ok" } : { status: "no-geo" });
+            failures = 0;
+          } catch (error) {
+            if (error.name === "AbortError" || signal.aborted) return false;
+            updatePoints([point.order], { status: "no-geo" });
+            failures += 1;
+            if (failures >= CONFIG.GEOCODE_MAX_FAILURES) {
+              updatePoints(pending.slice(index + 1).map((p) => p.order), { status: "no-geo" });
+              setState({ progress: null });
+              UI.toast(I18N.geocodeFailed);
+              return false;
+            }
+          }
+        }
+        setState({ progress: null });
+        return true;
+      }
+
+      /**
+       * Resolves missing coordinates for the current points, then routes every segment.
+       * @param {AbortSignal} signal Aborted when another day is loaded.
+       */
+      async function run(signal) {
+        try {
+          const completed = await geocodePending(signal);
+          if (signal.aborted) return;
+          MapView.fitAll(state.points);
+          await routeAll(signal);
+          if (signal.aborted) return;
+          const missing = state.points.filter((p) => p.status === "no-geo").length;
+          if (completed && missing > 0) UI.toast(Util.fmt(I18N.geocodeMissing, { n: missing }));
+        } catch (error) {
+          if (error.name !== "AbortError") console.error("Planner failed", error);
+        }
+      }
+
+      /** Straight dashed line used when a walking route is unavailable. */
+      function fallbackSegment({ a, b }) {
+        const distance = Model.haversine(a, b);
+        return {
+          coords: [[a.lat, a.lon], [b.lat, b.lon]],
+          distance,
+          duration: distance / CONFIG.WALK_SPEED_MPS,
+          status: "fallback",
+        };
+      }
+
+      async function routeAll(signal) {
+        const pairs = Model.segmentPairs(state.points);
+        if (pairs.length === 0) {
+          setState({ segments: [] });
+          return;
+        }
+        const results = new Map();
+        let failures = 0;
+        let routerDown = !navigator.onLine;
+        Router.reset();
+        const publish = () => setState({
+          segments: pairs.filter((p) => results.has(p.id))
+            .map((p) => ({ from: p.a.order, to: p.b.order, ...results.get(p.id) })),
+          progress: { label: I18N.routing, done: results.size, total: pairs.length },
+        });
+        setState({ progress: { label: I18N.routing, done: 0, total: pairs.length } });
+        await Util.mapPool(pairs, CONFIG.ROUTE_CONCURRENCY, async (pair) => {
+          if (signal.aborted) return;
+          let segment;
+          if (routerDown) {
+            segment = fallbackSegment(pair);
+          } else {
+            try {
+              segment = { ...(await Router.route(pair.a, pair.b, { signal })), status: "ok" };
+              failures = 0;
+            } catch (error) {
+              if (error.name === "AbortError" || signal.aborted) return;
+              console.error("Routing failed", error);
+              failures += 1;
+              routerDown = failures >= CONFIG.ROUTE_MAX_FAILURES;
+              segment = fallbackSegment(pair);
+            }
+          }
+          if (signal.aborted) return;
+          results.set(pair.id, segment);
+          publish();
+        });
+        if (signal.aborted) return;
+        setState({ progress: null });
+        const fallbacks = [...results.values()].filter((r) => r.status === "fallback").length;
+        if (fallbacks === 0) return;
+        const offline = !navigator.onLine;
+        UI.toast(offline ? I18N.routingOffline : Util.fmt(I18N.routesFallback, { n: fallbacks }));
+      }
+
+      /** Queues points without a location for another geocoding attempt. */
+      function retryMissing() {
+        const missing = state.points.filter((p) => p.status === "no-geo");
+        updatePoints(missing.map((p) => p.order), { status: "pending" });
+      }
+
+      /** Sets coordinates entered by the user and remembers them for the address. */
+      function setManual(order, coords) {
+        updatePoints([order], { ...coords, status: "ok" });
+        const point = state.points.find((p) => p.order === order);
+        if (point?.address) Geocoder.remember(point.address, coords, state.settings.city);
+      }
+
+      return { run, retryMissing, setManual };
+    })();
+
+    /* ===== App ===== */
+    const App = (() => {
+      let renderQueued = false;
+      let jobController = null;
+      let persistTimer = 0;
+      let persisted = { points: null, dayKey: null };
+
+      function scheduleRender() {
+        if (renderQueued) return;
+        renderQueued = true;
+        requestAnimationFrame(() => {
+          renderQueued = false;
+          MapView.render(state);
+          UI.render(state);
+        });
+      }
+
+      function toggleGps() {
+        if (state.gps.on) Gps.stop();
+        else Gps.start();
+      }
+
+      // Cancels the previous load/geocode job so late results cannot overwrite new data.
+      function beginJob() {
+        jobController?.abort();
+        jobController = new AbortController();
+        setState({ progress: null });
+        return jobController.signal;
+      }
+
+      function showCsv(text, label, dayKey, signal) {
+        const { points, issues } = CSV.toPoints(CSV.parse(text));
+        setState({ points, segments: [], issues, dayLabel: label, dayKey, activeOrder: null });
+        if (points.length === 0) UI.toast(I18N.csvEmpty);
+        else if (issues.length > 0) UI.toast(Util.fmt(I18N.csvIssues, { n: issues.length }));
+        MapView.fitAll(points);
+        return Planner.run(signal);
+      }
+
+      function saveSettings(patch) {
+        const settings = { ...state.settings, ...patch };
+        Store.set("settings", settings);
+        setState({ settings });
+      }
+
+      async function refreshLibrary() {
+        setState({ library: await Library.list() });
+      }
+
+      async function openDay(key) {
+        const signal = beginJob();
+        let loaded;
+        try {
+          loaded = await Library.load(key, { signal });
+        } catch (error) {
+          if (error.name === "AbortError") return;
+          console.error("Day load failed", error);
+          UI.toast(I18N.dayLoadError);
+          return;
+        }
+        if (signal.aborted) return;
+        saveSettings({ lastDay: key });
+        await showCsv(loaded.text, loaded.label, key, signal);
+      }
+
+      async function importFiles(files) {
+        try {
+          const confirmOverwrite = (n) => UI.confirm(Util.fmt(I18N.importOverwrite, { n }));
+          const { added, skipped } = await Library.importFiles(files, { confirmOverwrite });
+          await refreshLibrary();
+          const parts = [
+            added > 0 && Util.fmt(I18N.importDone, { n: added }),
+            skipped > 0 && Util.fmt(I18N.importSkipped, { n: skipped }),
+          ].filter(Boolean);
+          UI.toast(parts.length > 0 ? parts.join(" ") : I18N.importNothing);
+        } catch (error) {
+          console.error("Import failed", error);
+          UI.toast(I18N.importFailed);
+        }
+      }
+
+      async function deleteDay(key, title) {
+        if (!(await UI.confirm(Util.fmt(I18N.deleteConfirm, { title })))) return;
+        try {
+          await Library.remove(key);
+          await refreshLibrary();
+          UI.toast(I18N.dayDeleted);
+        } catch (error) {
+          console.error("Delete failed", error);
+          UI.toast(I18N.importFailed);
+        }
+      }
+
+      async function startLibrary() {
+        const { persistent } = await Library.init();
+        if (!persistent) UI.toast(I18N.storageUnavailable, CONFIG.TOAST_LONG_MS);
+        await refreshLibrary();
+        const lastDay = state.settings.lastDay;
+        const exists = state.library.some((trip) => trip.days.some((day) => day.key === lastDay));
+        if (exists && state.points.length === 0) await openDay(lastDay);
+      }
+
+      async function loadFile(file) {
+        if (file.size > CONFIG.MAX_CSV_BYTES) {
+          const mb = CONFIG.MAX_CSV_BYTES / (1024 * 1024);
+          UI.toast(Util.fmt(I18N.csvTooBig, { mb }));
+          return;
+        }
+        const signal = beginJob();
+        let text;
+        try {
+          text = CSV.decode(await file.arrayBuffer());
+        } catch (error) {
+          console.error("CSV read failed", error);
+          UI.toast(I18N.csvReadError);
+          return;
+        }
+        if (!signal.aborted) await showCsv(text, file.name, null, signal);
+      }
+
+      function downloadSample() {
+        const blob = new Blob([`\uFEFF${CSV.SAMPLE}`], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        Util.el("a", { href: url, download: CONFIG.SAMPLE_FILE_NAME }).click();
+        setTimeout(() => URL.revokeObjectURL(url), CONFIG.BLOB_REVOKE_MS);
+      }
+
+      function clearData() {
+        beginJob();
+        setState({
+          points: [], segments: [], issues: [], dayLabel: "", dayKey: null, activeOrder: null,
+        });
+        saveSettings({ lastDay: null });
+        UI.toast(I18N.dataCleared);
+      }
+
+      async function locatePoint(order) {
+        const input = await UI.prompt(I18N.promptCoords);
+        if (input === null || input.trim() === "") return;
+        const coords = CSV.parseLatLon(input);
+        if (!coords) {
+          UI.toast(I18N.badCoords);
+          return;
+        }
+        Planner.setManual(order, coords);
+        Planner.run(beginJob());
+      }
+
+      function retryGeocode() {
+        const signal = beginJob();
+        Planner.retryMissing();
+        Planner.run(signal);
+      }
+
+      // On phones the open sheet would hide the segment, so it collapses first.
+      function selectLeg(key) {
+        if (!window.matchMedia(CONFIG.WIDE_QUERY).matches) setState({ sheetOpen: false });
+        MapView.focusSegment(key);
+      }
+
+      function selectPoint(order, action) {
+        if (action === "locate") {
+          locatePoint(order);
+          return;
+        }
+        setState({ activeOrder: order });
+        if (!MapView.focusPoint(order)) UI.toast(I18N.noMarker);
+      }
+
+      // Saves the loaded day so it reopens instantly (also offline) on the next start.
+      function schedulePersist() {
+        if (state.points === persisted.points && state.dayKey === persisted.dayKey) return;
+        clearTimeout(persistTimer);
+        persistTimer = setTimeout(() => {
+          persisted = { points: state.points, dayKey: state.dayKey };
+          const { points, issues, dayLabel, dayKey } = state;
+          Store.set("points", { points, issues, dayLabel, dayKey });
+        }, CONFIG.PERSIST_DEBOUNCE_MS);
+      }
+
+      function restoreSaved() {
+        const saved = Model.restoreSaved(Store.get("points", null));
+        if (!saved) return;
+        persisted = { points: saved.points, dayKey: saved.dayKey };
+        setState({ ...saved, segments: [] });
+        MapView.fitAll(saved.points);
+        Planner.run(beginJob());
+      }
+
+      function watchConnectivity() {
+        window.addEventListener("offline", () => UI.toast(I18N.offline, CONFIG.TOAST_LONG_MS));
+        window.addEventListener("online", () => UI.toast(I18N.online));
+        if (!navigator.onLine) UI.toast(I18N.offline, CONFIG.TOAST_LONG_MS);
+      }
+
+      // Last-resort net so a bug never fails silently.
+      function watchUnexpectedErrors() {
+        window.addEventListener("error", (event) => {
+          console.error("Unhandled error", event.error ?? event.message);
+          UI.toast(I18N.unexpectedError);
+        });
+        window.addEventListener("unhandledrejection", (event) => {
+          if (event.reason?.name === "AbortError") return;
+          console.error("Unhandled rejection", event.reason);
+          UI.toast(I18N.unexpectedError);
+        });
+      }
+
+      function init() {
+        if (location.search.includes("selftest")) selfTest();
+        setState({ settings: { ...state.settings, ...Store.get("settings", {}) } });
+        subscribe(scheduleRender);
+        UI.init({
+          onToggleGps: toggleGps,
+          onCenter: () => Gps.setFollow(true),
+          onToggleSheet: () => setState({ sheetOpen: !state.sheetOpen }),
+          onSelectPoint: selectPoint,
+          onSelectLeg: selectLeg,
+          onLoadFile: loadFile,
+          onSample: downloadSample,
+          onClear: clearData,
+          onImport: importFiles,
+          onOpenDay: openDay,
+          onDeleteDay: deleteDay,
+          onRetryGeocode: retryGeocode,
+          onCityChange: (city) => saveSettings({ city }),
+          onSetTheme: (theme) => saveSettings({ theme }),
+          onLayoutChange: scheduleRender,
+        });
+        MapView.init({
+          onUserPan: () => Gps.setFollow(false),
+          onSelectPoint: (order) => setState({ activeOrder: order }),
+        });
+        Gps.init();
+        scheduleRender();
+        restoreSaved();
+        subscribe(schedulePersist);
+        watchConnectivity();
+        watchUnexpectedErrors();
+        startLibrary();
+      }
+
+      return { init };
+    })();
+
+    App.init();
+  </script>
+</body>
+</html>
